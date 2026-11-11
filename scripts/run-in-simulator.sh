@@ -98,12 +98,12 @@ if grep -q -- "--display=" <<<"$PROBE"; then
   echo "Multiple displays; using display $DISPLAY_ID"
 fi
 
-xcrun simctl io "$UDID" recordVideo "${DISPLAY_ARGS[@]}" --codec=h264 --force "$OUT/run.mp4" &
+xcrun simctl io "$UDID" recordVideo ${DISPLAY_ARGS[@]+"${DISPLAY_ARGS[@]}"} --codec=h264 --force "$OUT/run.mp4" &
 REC_PID=$!
 sleep 2
 xcrun simctl launch "$UDID" "$BUNDLE_ID"
 sleep 6
-xcrun simctl io "$UDID" screenshot "${DISPLAY_ARGS[@]}" "$OUT/screenshot.png"
+xcrun simctl io "$UDID" screenshot ${DISPLAY_ARGS[@]+"${DISPLAY_ARGS[@]}"} "$OUT/screenshot.png"
 sleep 2
 kill -INT "$REC_PID" || true
 wait "$REC_PID" || true
