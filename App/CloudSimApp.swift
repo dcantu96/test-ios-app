@@ -7,14 +7,7 @@ struct CloudSimApp: App {
         // Demo recordings only (DEMO_SLOWMO): UIKit's animations (sheets, the keyboard) run slower on every window,
         // matching the SwiftUI ones slowed by `Animation.paced`. See DemoPace.
         if DemoPace.factor > 1 {
-            let speed = Float(1 / DemoPace.factor)
-            NotificationCenter.default.addObserver(forName: UIWindow.didBecomeVisibleNotification, object: nil, queue: .main) { note in
-                MainActor.assumeIsolated {
-                    if let window = note.object as? UIWindow {
-                        window.layer.speed = speed
-                    }
-                }
-            }
+            DemoWindowPacer.shared.start()
         }
     }
 
@@ -34,6 +27,22 @@ enum DemoPace {
         let value = Double(ProcessInfo.processInfo.environment["DEMO_SLOWMO"] ?? "") ?? 1
         return value > 1 ? value : 1
     }()
+}
+
+/// Slows every window's Core Animation clock as it appears (the app's window, the sheet, the keyboard).
+/// Selector-based so it compiles cleanly under Swift 6: the closure form sent a Notification across actors.
+@MainActor
+final class DemoWindowPacer: NSObject {
+    static let shared = DemoWindowPacer()
+
+    func start() {
+        NotificationCenter.default.addObserver(self, selector: #selector(windowBecameVisible(_:)),
+                                               name: UIWindow.didBecomeVisibleNotification, object: nil)
+    }
+
+    @objc private func windowBecameVisible(_ note: Notification) {
+        (note.object as? UIWindow)?.layer.speed = Float(1 / DemoPace.factor)
+    }
 }
 
 extension Animation {
