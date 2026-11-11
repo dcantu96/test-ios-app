@@ -7,11 +7,34 @@ inputs:
   scheme:
     description: Scheme to build for testing (CloudSim for e2e, CloudSimDemo for the demo)
     required: true
+outputs:
+  sim-cache-hit:
+    description: Whether a settled Simulator came from the cache
+    value: ${{ steps.simcache.outputs.cache-hit }}
+  sim-cache-key:
+    description: The key a settled Simulator for this runner image is cached under
+    value: ${{ steps.key.outputs.key }}
 runs:
   using: composite
   steps:
+    - name: Settled-Simulator cache key
+      id: key
+      shell: bash
+      run: echo "key=sim-settled-${ImageOS:-macos}-${ImageVersion:-unknown}-v2" >> "$GITHUB_OUTPUT"
+
+    # A Simulator that has already been booted, settled and used boots in ~15 s instead of ~45 s, and its
+    # one-time setup is done. The sim-image job (ci.yml) makes it whenever a run finds none.
+    - name: Restore the settled Simulator
+      id: simcache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/Library/Developer/CoreSimulator/Devices
+        key: ${{ steps.key.outputs.key }}
+
     - name: Pick the Simulator
       shell: bash
+      env:
+        SIM_CACHE_HIT: ${{ steps.simcache.outputs.cache-hit }}
       run: bash scripts/sim.sh prepare
 
     - uses: actions/setup-node@v5

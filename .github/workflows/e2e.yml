@@ -39,15 +39,19 @@ jobs:
     timeout-minutes: 30
     env:
       PUBLISH_BRANCH: e2e-output/${{ github.head_ref || github.ref_name }}
+    outputs:
+      sim-cache-hit: ${{ steps.setup.outputs.sim-cache-hit }}
+      sim-cache-key: ${{ steps.setup.outputs.sim-cache-key }}
     steps:
       - uses: actions/checkout@v5
 
-      - uses: ./.github/actions/mac-setup
+      - id: setup
+        uses: ./.github/actions/mac-setup
         with:
           scheme: CloudSim
 
       - name: Boot the Simulator
-        run: SIM_PREWARM_AX=1 bash scripts/sim.sh boot "$SIM_UDID"
+        run: bash scripts/sim.sh boot "$SIM_UDID"
 
       - name: E2E suite
         run: bash scripts/run-e2e.sh
@@ -134,3 +138,33 @@ jobs:
           name: demo-raw
           path: out-demo/
           retention-days: 3
+
+  # When a run found no settled Simulator for this runner image, make one for the next runs: boot, let the
+  # first-run work finish, warm up with one e2e pass, shut down, cache. Runs after e2e so it never delays the
+  # check. A cache made on main serves every PR; one made on a PR serves that PR's later pushes.
+  sim-image:
+    needs: e2e
+    if: always() && needs.e2e.outputs.sim-cache-hit != 'true' && needs.e2e.outputs.sim-cache-key != ''
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/mac-setup
+        with:
+          scheme: CloudSim
+
+      - name: Boot, settle, warm up
+        run: |
+          bash scripts/sim.sh boot "$SIM_UDID"
+          for i in $(seq 1 45); do L=$(sysctl -n vm.loadavg | awk '{print $2}'); [ "${L%.*}" -lt 15 ] && break; sleep 10; done
+          echo "settled: load $L"
+          bash scripts/run-e2e.sh > /dev/null || true
+          xcrun simctl shutdown all; sleep 3
+          du -sh ~/Library/Developer/CoreSimulator/Devices
+
+      - uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Developer/CoreSimulator/Devices
+          key: ${{ needs.e2e.outputs.sim-cache-key }}
+
