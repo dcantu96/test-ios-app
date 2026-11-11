@@ -1,12 +1,11 @@
 name: CI
 
-# Two Mac machines in parallel, plus a Linux one:
-#   e2e         the merge gate: API tests against Postgres, then UITests/ driving the app in the newest iOS
-#               Simulator against the live API. Make the "e2e" check required on main.
-#   demo        (PRs) the human-paced walkthrough in DemoTests/, recorded. Never blocks the merge.
-#   demo-video  composes the recording into a 1080p60 MP4 on Linux and posts it on the PR.
-# Each Mac boots one Simulator in the background while it installs, starts the backend and builds
-# (.github/actions/mac-setup); a booted, migrated Simulator is cached per runner image.
+# Two Macs in parallel, each doing its work back to back (see .github/actions/mac-setup and scripts/sim.sh for
+# why nothing overlaps the Simulator boot):
+#   e2e   the merge gate: API tests against Postgres, then UITests/ driving the app in the newest iOS Simulator
+#         against the live API. Make the "e2e" check required on main.
+#   demo  (PRs) records DemoTests/ at human pace, then composes the 1080p60 MP4 on the same Mac (5 CPUs, with
+#         the Simulator shut down) and posts it on the PR. Never blocks the merge.
 on:
   pull_request:
     branches: [main]
@@ -35,7 +34,7 @@ env:
 jobs:
   e2e:
     name: e2e
-    # Xcode 27 / macOS 27 image (Apple Silicon, 5 CPUs). Newest Apple toolchain GitHub hosts.
+    # Xcode 27 / macOS 27 image (Apple Silicon, 5 CPUs, 14 GB). Newest Apple toolchain GitHub hosts.
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -43,15 +42,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - id: setup
-        uses: ./.github/actions/mac-setup
+      - uses: ./.github/actions/mac-setup
         with:
           scheme: CloudSim
 
+      - name: Boot the Simulator
+        run: bash scripts/sim.sh boot "$SIM_UDID"
+
       - name: E2E suite
-        run: |
-          bash scripts/sim.sh wait "$SIM_UDID"
-          bash scripts/run-e2e.sh
+        run: bash scripts/run-e2e.sh
 
       - name: Publish screenshots to the e2e-output branch
         if: always()
@@ -67,23 +66,12 @@ jobs:
           path: out/
           retention-days: 7
 
-      - name: Shut down the Simulator for caching
-        if: always() && steps.setup.outputs.sim-cache-hit != 'true'
-        run: |
-          xcrun simctl shutdown all || true
-          du -sh ~/Library/Developer/CoreSimulator/Devices
-
-      - name: Cache the booted Simulator devices
-        if: always() && steps.setup.outputs.sim-cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/Library/Developer/CoreSimulator/Devices
-          key: ${{ steps.setup.outputs.sim-cache-key }}
-
   demo:
     if: github.event_name == 'pull_request' || inputs.demo
     runs-on: xcode-27
     timeout-minutes: 30
+    env:
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v5
 
@@ -91,48 +79,22 @@ jobs:
         with:
           scheme: CloudSimDemo
 
+      - name: Boot the Simulator
+        run: bash scripts/sim.sh boot "$SIM_UDID"
+
       - name: Record the walkthrough
-        run: |
-          bash scripts/sim.sh wait "$SIM_UDID"
-          OUT="$PWD/out-demo" bash scripts/run-demo.sh
-
-      - name: Hand the recording to the compose job
-        uses: actions/upload-artifact@v5
-        with:
-          name: demo-raw
-          path: |
-            out-demo/raw.mp4
-            out-demo/markers.json
-            out/device.txt
-            out/runtime.txt
-            out/xcode-version.txt
-          retention-days: 1
-
-  demo-video:
-    needs: demo
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      PR: ${{ github.event.pull_request.number }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v5
-        with:
-          name: demo-raw
-          path: raw
-
-      - name: Install ffmpeg (static, via pip) and Pillow
-        run: python3 -m pip install --quiet imageio-ffmpeg pillow
+        run: OUT="$PWD/out-demo" bash scripts/run-demo.sh
 
       - name: Compose the MP4
         run: |
-          export FFMPEG="$(python3 -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          DEVICE="$(sed -E 's/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//; s/^ +//; s/ +$//' raw/out/device.txt)"
-          RUNTIME="$(sed -E 's/ \(.*//' raw/out/runtime.txt)"
-          XCODE="$(head -1 raw/out/xcode-version.txt)"
+          xcrun simctl shutdown all || true   # free the CPUs for the encoder
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet imageio-ffmpeg pillow
+          export FFMPEG="$("$RUNNER_TEMP/venv/bin/python" -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          DEVICE="$(sed -E 's/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//; s/^ +//; s/ +$//' out/device.txt)"
+          RUNTIME="$(sed -E 's/ \(.*//' out/runtime.txt)"
+          XCODE="$(head -1 out/xcode-version.txt)"
           FOOTER="${PR:+PR #$PR · }$BRANCH · ${HEAD_SHA::7} · $DEVICE, $RUNTIME · $XCODE"
-          python3 demo/compose.py --recording raw/out-demo/raw.mp4 --markers raw/out-demo/markers.json \
+          "$RUNNER_TEMP/venv/bin/python" demo/compose.py --recording out-demo/raw.mp4 --markers out-demo/markers.json \
             --out demo.mp4 --footer "$FOOTER" --quality high
 
       - name: Publish the preview branch
@@ -164,3 +126,11 @@ jobs:
           EOF
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md --edit-last --create-if-none \
             || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+
+      - name: Upload the recording if composing failed
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: demo-raw
+          path: out-demo/
+          retention-days: 3

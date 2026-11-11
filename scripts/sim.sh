@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Simulator helpers for CI.
 #
-#   scripts/sim.sh prepare   Select the newest Xcode, pick the newest *general* iOS runtime and an iPhone Pro,
-#                            and start booting it in the background. A first boot takes ~100 s on a fresh runner
-#                            (most of it one-time data migration), so it runs while Postgres, the API tests and
-#                            the build happen. Writes SIM_UDID to $GITHUB_ENV and $OUT/sim.env.
-#                            One Simulator per machine: two booting at once starve a 5-CPU runner.
-#   scripts/sim.sh wait UDID Wait until that simulator has finished booting, then give it a clean status bar.
+#   scripts/sim.sh prepare   Select the newest Xcode, pick the newest *general* iOS runtime and the newest iPhone
+#                            Pro, and turn off Spotlight on the runner. Writes SIM_UDID to $GITHUB_ENV and
+#                            $OUT/sim.env. Does NOT boot (see below).
+#   scripts/sim.sh boot UDID Boot the Simulator (if needed), wait until it's up, and give it a clean status bar.
+#
+# Why boot last: a freshly booted iOS Simulator spends minutes on first-run work (wallpaper posters, widgets,
+# Shortcuts, App Store, Home, mail...) with load average past 300 on the 5-CPU runner. Anything overlapping it
+# crawls: the build went from 13 s to 111 s, Postgres + API tests from 12 s to 119 s. Measured on xcode-27:
+# backend 12 s, build 13 s and boot ~45 s back to back beat any overlap. One Simulator per machine, too.
 set -euo pipefail
 
 OUT="${OUT:-$PWD/out}"
@@ -19,11 +22,8 @@ if [ "$cmd" = "prepare" ]; then
   xcodebuild -version | tee "$OUT/xcode-version.txt"
   echo "CPUs: $(sysctl -n hw.ncpu), memory: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB" | tee "$OUT/machine.txt"
 
-  if [ "${SIM_CACHE_HIT:-}" = "true" ]; then
-    # Simulator devices were restored from the cache: restart CoreSimulator so it reads them from disk.
-    sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-    echo "Using cached Simulator devices ($(du -sh ~/Library/Developer/CoreSimulator/Devices | cut -f1))"
-  fi
+  # The runner's Spotlight indexes every new Simulator device at full CPU; we never search the runner.
+  sudo mdutil -a -i off > /dev/null 2>&1 || true
   xcrun simctl list runtimes -j > "$OUT/runtimes.json"
   RUNTIME_ID="$(python3 - "$OUT/runtimes.json" "$OUT/runtime.txt" <<'PY'
 import json, re, sys
@@ -55,24 +55,20 @@ PY
 )"
   [ "$SIM_UDID" = "-" ] && SIM_UDID="$(xcrun simctl create "CloudSim iPhone" "$DEVTYPE" "$RUNTIME_ID")"
   xcrun simctl list devices | grep "$SIM_UDID" | tee "$OUT/device.txt"
-  # simctl boot blocks until the device is up, so it goes to the background; `wait` joins it later.
-  date +%s > "$OUT/boot-started-at"
-  [ "${NO_BOOT:-0}" = "1" ] || nohup xcrun simctl boot "$SIM_UDID" > "$OUT/boot.log" 2>&1 &
   echo "SIM_UDID=$SIM_UDID" | tee "$OUT/sim.env"
   cat "$OUT/sim.env" >> "${GITHUB_ENV:-/dev/null}"
   exit 0
 fi
 
-if [ "$cmd" = "wait" ]; then
+if [ "$cmd" = "boot" ]; then
   UDID="$2"
   t0=$(date +%s)
   xcrun simctl bootstatus "$UDID" -b > /dev/null
   xcrun simctl ui "$UDID" appearance light || true
   xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
-  started="$(cat "$OUT/boot-started-at" 2>/dev/null || echo "$t0")"
-  echo "Simulator $UDID ready: waited $(( $(date +%s) - t0 ))s here, $(( $(date +%s) - started ))s since boot began"
+  echo "Simulator $UDID booted in $(( $(date +%s) - t0 ))s"
   exit 0
 fi
 
-echo "usage: $0 prepare | wait UDID" >&2
+echo "usage: $0 prepare | boot UDID" >&2
 exit 2
