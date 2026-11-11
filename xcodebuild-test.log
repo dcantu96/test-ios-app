@@ -1,0 +1,147 @@
+Command line invocation:
+    /Applications/Xcode_27.2.app/Contents/Developer/usr/bin/xcodebuild test-without-building -project CloudSim.xcodeproj -scheme CloudSim -destination id=A8CE73D2-F54C-4FB2-B688-BC6BD7612FA8 -derivedDataPath build -resultBundlePath /Users/runner/work/test-ios-app/test-ios-app/out/e2e.xcresult -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
+
+Build settings from command line:
+    CODE_SIGNING_ALLOWED = NO
+
+Writing result bundle at path:
+	/Users/runner/work/test-ios-app/test-ios-app/out/e2e.xcresult
+
+2026-11-11 12:30:53.994454+0000 CloudSimUITests-Runner[18929:56369] [Default] Running tests...
+    t =      nans Interface orientation changed to Portrait
+objc[18929]: Class UIAccessibilityLoaderWebShared is implemented in both /private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.2.8117.0.W2eFvu/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.2.simruntime/Contents/Resources/RuntimeRoot/System/Library/AccessibilityBundles/WebCore.axbundle/WebCore (0x107fb8310) and /private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.2.8117.0.W2eFvu/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.2.simruntime/Contents/Resources/RuntimeRoot/System/Library/AccessibilityBundles/WebKit.axbundle/WebKit (0x104fec398). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+Test Suite 'All tests' started at 2026-11-11 12:31:01.104.
+Test Suite 'CloudSimUITests.xctest' started at 2026-11-11 12:31:01.108.
+Test Suite 'TimeCapsuleUITests' started at 2026-11-11 12:31:01.108.
+Test Case '-[CloudSimUITests.TimeCapsuleUITests testSealRefuseEarlyOpenWaitThenReveal]' started.
+    t =     0.10s Start Test at 2026-11-11 12:31:01.204
+2026-11-11 12:31:03.339 xcodebuild[17453:51060] [MT] IDELaunchParametersSnapshot: debugger version lookup failed for path '<nil>': noURL
+2026-11-11 12:31:03.340 xcodebuild[17453:51060] [MT] IDELaunchParametersSnapshot: no debugger version
+    t =     0.54s Set Up
+    t =     0.56s Open com.dcantu96.CloudSim
+    t =     0.56s     Launch com.dcantu96.CloudSim
+    t =     4.63s         Setting up automation session
+    t =     9.28s         Wait for com.dcantu96.CloudSim to idle
+    t =    11.91s Waiting 20.0s for "messageField" TextField to exist
+    t =    12.92s     Checking `Expect predicate `existsNoRetry == 1` for object "messageField" TextField`
+    t =    12.92s         Checking existence of `"messageField" TextField`
+    t =    13.04s Checking existence of `"errorBanner" StaticText`
+    t =    13.07s Find the Target Application 'com.dcantu96.CloudSim'
+    t =    13.34s Added attachment named '1 Launched'
+    t =    13.34s Tap "messageField" TextField
+    t =    13.34s     Wait for com.dcantu96.CloudSim to idle
+    t =    13.35s     Find the "messageField" TextField
+    t =    13.38s     Check for interrupting elements affecting "messageField" TextField
+    t =    13.42s     Synthesize event
+    t =    13.86s     Wait for com.dcantu96.CloudSim to idle
+    t =    16.04s Type 'Dear future me, re...' into "messageField" TextField
+    t =    16.04s     Wait for com.dcantu96.CloudSim to idle
+    t =    16.39s     Find the "messageField" TextField
+    t =    16.52s     Check for interrupting elements affecting "messageField" TextField
+    t =    16.58s     Synthesize event
+    t =    17.51s     Wait for com.dcantu96.CloudSim to idle
+    t =    17.51s Tap "10s" Button
+    t =    17.51s     Wait for com.dcantu96.CloudSim to idle
+    t =    17.52s     Find the "10s" Button
+    t =    17.57s     Check for interrupting elements affecting "10s" Button
+    t =    17.63s     Synthesize event
+    t =    17.94s     Wait for com.dcantu96.CloudSim to idle
+    t =    19.26s Tap "sealButton" Button
+    t =    19.26s     Wait for com.dcantu96.CloudSim to idle
+    t =    19.27s     Find the "sealButton" Button
+    t =    19.33s     Check for interrupting elements affecting "sealButton" Button
+    t =    19.39s     Synthesize event
+    t =    19.73s     Wait for com.dcantu96.CloudSim to idle
+    t =    20.24s Waiting 10.0s for "capsuleRow" Button to exist
+    t =    21.30s     Checking `Expect predicate `existsNoRetry == 1` for object "capsuleRow" Button`
+    t =    21.30s         Checking existence of `"capsuleRow" Button`
+    t =    21.36s Checking existence of `Button (First Match)`
+    t =    21.44s Find the Target Application 'com.dcantu96.CloudSim'
+    t =    22.05s Added attachment named '2 Sealed for 10 seconds'
+    t =    22.05s Tap "messageField" TextField
+    t =    22.05s     Wait for com.dcantu96.CloudSim to idle
+    t =    22.06s     Find the "messageField" TextField
+    t =    22.10s     Check for interrupting elements affecting "messageField" TextField
+    t =    22.15s     Synthesize event
+    t =    22.49s     Wait for com.dcantu96.CloudSim to idle
+    t =    22.66s Type 'Open this next yea...' into "messageField" TextField
+    t =    22.66s     Wait for com.dcantu96.CloudSim to idle
+    t =    23.05s     Find the "messageField" TextField
+    t =    23.14s     Check for interrupting elements affecting "messageField" TextField
+    t =    23.20s     Synthesize event
+    t =    23.88s     Wait for com.dcantu96.CloudSim to idle
+    t =    23.89s Tap "1y" Button
+    t =    23.89s     Wait for com.dcantu96.CloudSim to idle
+    t =    23.89s     Find the "1y" Button
+    t =    23.98s     Check for interrupting elements affecting "1y" Button
+    t =    24.04s     Synthesize event
+    t =    24.37s     Wait for com.dcantu96.CloudSim to idle
+    t =    25.89s Tap "sealButton" Button
+    t =    25.89s     Wait for com.dcantu96.CloudSim to idle
+    t =    25.90s     Find the "sealButton" Button
+    t =    25.97s     Check for interrupting elements affecting "sealButton" Button
+    t =    26.04s     Synthesize event
+    t =    26.38s     Wait for com.dcantu96.CloudSim to idle
+    t =    27.85s Get number of matches for: Elements matching predicate '"capsuleRow" IN identifiers'
+    t =    27.89s Find the "capsuleRow" Button
+    t =    27.98s Tap "capsuleRow" Button
+    t =    27.98s     Wait for com.dcantu96.CloudSim to idle
+    t =    27.99s     Find the "capsuleRow" Button
+    t =    28.06s     Check for interrupting elements affecting "capsuleRow" Button
+    t =    28.12s     Synthesize event
+    t =    28.44s     Wait for com.dcantu96.CloudSim to idle
+    t =    28.45s Waiting 10.0s for "lockedBanner" StaticText to exist
+    t =    29.49s     Checking `Expect predicate `existsNoRetry == 1` for object "lockedBanner" StaticText`
+    t =    29.49s         Checking existence of `"lockedBanner" StaticText`
+    t =    29.54s Checking existence of `Button (First Match)`
+    t =    29.70s Find the Target Application 'com.dcantu96.CloudSim'
+    t =    30.14s Added attachment named '3 Server refused to open the year-long capsule'
+    t =    31.18s Checking `Expect predicate `value == "ready"` for object "capsuleRow" Button`
+    t =    31.18s     Find the "capsuleRow" Button
+    t =    31.27s Find the Target Application 'com.dcantu96.CloudSim'
+    t =    31.99s Added attachment named '4 Ready to open'
+    t =    32.02s Tap "capsuleRow" Button
+    t =    32.02s     Wait for com.dcantu96.CloudSim to idle
+    t =    32.03s     Find the "capsuleRow" Button
+    t =    32.20s     Check for interrupting elements affecting "capsuleRow" Button
+    t =    32.29s     Synthesize event
+    t =    32.75s     Wait for com.dcantu96.CloudSim to idle
+    t =    33.07s Waiting 10.0s for "revealedMessage" StaticText to exist
+    t =    34.07s     Checking `Expect predicate `existsNoRetry == 1` for object "revealedMessage" StaticText`
+    t =    34.07s         Checking existence of `"revealedMessage" StaticText`
+    t =    34.18s Find the "revealedMessage" StaticText
+    t =    35.27s Find the Target Application 'com.dcantu96.CloudSim'
+    t =    35.69s Added attachment named '5 Seal cracked, message revealed'
+    t =    35.70s Terminate com.dcantu96.CloudSim:19630
+    t =    36.76s Open com.dcantu96.CloudSim
+    t =    36.77s     Launch com.dcantu96.CloudSim
+2026-11-11 12:31:38.055 xcodebuild[17453:51060] [MT] IDELaunchParametersSnapshot: debugger version lookup failed for path '<nil>': noURL
+2026-11-11 12:31:38.083 xcodebuild[17453:51060] [MT] IDELaunchParametersSnapshot: no debugger version
+    t =    37.51s         Setting up automation session
+    t =    41.56s         Wait for com.dcantu96.CloudSim to idle
+    t =    43.77s Waiting 20.0s for Button (First Match) to exist
+    t =    44.82s     Checking `Expect predicate `existsNoRetry == 1` for object Button (First Match)`
+    t =    44.82s         Checking existence of `Button (First Match)`
+    t =    46.52s Get number of matches for: Elements matching predicate '"capsuleRow" IN identifiers'
+    t =    46.59s Find the "capsuleRow" Button
+    t =    46.63s Checking existence of `Button (First Match)`
+    t =    46.74s Find the Target Application 'com.dcantu96.CloudSim'
+    t =    47.00s Added attachment named '6 After relaunch, loaded from Postgres'
+    t =    47.01s Tear Down
+Test Case '-[CloudSimUITests.TimeCapsuleUITests testSealRefuseEarlyOpenWaitThenReveal]' passed (47.323 seconds).
+Test Suite 'TimeCapsuleUITests' passed at 2026-11-11 12:31:48.528.
+	 Executed 1 test, with 0 failures (0 unexpected) in 47.323 (47.420) seconds
+Test Suite 'CloudSimUITests.xctest' passed at 2026-11-11 12:31:48.529.
+	 Executed 1 test, with 0 failures (0 unexpected) in 47.323 (47.421) seconds
+Test Suite 'All tests' passed at 2026-11-11 12:31:48.530.
+	 Executed 1 test, with 0 failures (0 unexpected) in 47.323 (47.426) seconds
+2026-11-11 12:31:49.382 xcodebuild[17453:51060] [MT] IDETestOperationsObserverDebug: 71.547 elapsed -- Testing started completed.
+2026-11-11 12:31:49.382 xcodebuild[17453:51060] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-11 12:31:49.382 xcodebuild[17453:51060] [MT] IDETestOperationsObserverDebug: 71.547 sec, +71.547 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/test-ios-app/test-ios-app/out/e2e.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started
