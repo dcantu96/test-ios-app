@@ -74,7 +74,7 @@ Before this work it was e2e ~5 min and demo ~10 min (record, then a Linux job co
 - **Spotlight is turned off** on the runner (`mdutil -a -i off`): it indexes each new Simulator device at full CPU.
 - **XcodeGen comes from its release binary**, not Homebrew (`brew install` took up to 2 minutes on a busy runner).
 - **The demo is composed on its own Mac** with the Simulator shut down (~35 s on 5 CPUs; the 2-CPU Linux runner took 75 s plus a job hand-off).
-- **What would make it faster still** (not done; needs the user's call): bigger paid macOS runners (more CPUs absorb the Simulator's churn), or running the e2e suite on a self-hosted Mac that keeps a Simulator booted between runs.
+- **What would make it faster still** (not done; needs the user's call): a self-hosted Mac (the user's Mac mini) that keeps a Simulator booted between runs. Bigger GitHub runners would help too, but they're billed even on public repos.
 
 ## Demo videos
 
@@ -175,7 +175,8 @@ The API is TypeScript run directly by Node (`--experimental-strip-types`). Use o
 - **The file tools turn `\uXXXX` in your input into the actual character.** In code that needs a literal backslash-u escape (JS/Python regexes), build it at runtime (`chr(92) + "u..."`) or use the character.
 - **Swift versions:** the app target is Swift 6 (strict concurrency). The two UI test targets are Swift 5 so XCTest's non-isolated setup methods don't fight `@MainActor` `XCUIApplication`. Mark helpers that touch the app `@MainActor`.
 - **Required checks and path filters don't mix.** The workflow has no `paths-ignore` on `pull_request`, on purpose: a required check that never runs leaves the PR blocked.
-- **macOS minutes cost 10×.** The repo is private, so each run's Mac minutes count ten times against the account's Actions allowance (GitHub Free: 2,000 a month; one PR push here is ~10 Mac minutes, about 100 billed). Experiment in Linux, batch fixes, and push once.
+- **CI is free because the repo is public.** Standard GitHub-hosted runners (which `xcode-27` is: November's private-repo bill matched the standard $0.062/min macOS rate to the cent) cost nothing on public repos. While it was private, one push cost ~10 Mac minutes, about $0.62, and a night of experiments ran past the plan's $18 allowance. Still experiment in Linux and push once: a Mac round is ~5 minutes of waiting, and macOS runners can queue for 10 minutes when GitHub is busy. If the repo ever goes private again, the cost returns. Never switch to larger runners (`-xlarge`): those are billed even on public repos.
+- **Merging:** `main` has a ruleset: PR required, the **e2e** check required, no force pushes. The user is on its bypass list, since GitHub won't let them approve their own PR.
 
 ## Conventions
 

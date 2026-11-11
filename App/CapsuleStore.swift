@@ -63,6 +63,23 @@ final class CapsuleStore {
         }
     }
 
+    /// Write back from the reveal: seals a reply and closes the reveal.
+    func reply(to capsule: Capsule, message: String) async -> Bool {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        do {
+            let reply = try await api.reply(to: capsule.id, message: text)
+            syncClock(reply)
+            capsules.insert(reply, at: 0)
+            revealed = nil
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     func open(_ capsule: Capsule) async {
         do {
             switch try await api.open(id: capsule.id) {

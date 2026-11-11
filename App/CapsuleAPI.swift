@@ -11,6 +11,8 @@ struct Capsule: Identifiable, Decodable, Sendable, Equatable {
     let serverNow: Date
     /// How many times someone tried to open it too early. The server counts; opening on time isn't a knock.
     let knocks: Int
+    /// What this capsule answers, if it's a reply ("Write back"). You can only answer a capsule you've opened.
+    let replyTo: ReplyRef?
     /// Only present once the capsule has been opened. The server never sends it while sealed.
     let message: String?
 
@@ -31,6 +33,11 @@ struct Capsule: Identifiable, Decodable, Sendable, Equatable {
         default: "You knocked \(knocks) times before it was time."
         }
     }
+}
+
+struct ReplyRef: Decodable, Sendable, Equatable {
+    let id: String
+    let message: String?
 }
 
 enum OpenResult: Sendable {
@@ -65,6 +72,20 @@ struct CapsuleAPI: Sendable {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "message": message,
             "unlockInSeconds": seconds,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.expect(response, data, [201])
+        return try Self.decoder().decode(Capsule.self, from: data)
+    }
+
+    /// Answers an opened capsule. The server seals the reply for as long as the original waited.
+    func reply(to id: String, message: String) async throws -> Capsule {
+        var request = URLRequest(url: baseURL.appending(path: "capsules"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "message": message,
+            "replyTo": id,
         ])
         let (data, response) = try await URLSession.shared.data(for: request)
         try Self.expect(response, data, [201])

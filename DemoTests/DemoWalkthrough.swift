@@ -13,6 +13,7 @@ final class DemoWalkthrough: XCTestCase {
     private var events: [[String: Any]] = []
     private let letter = "Open this next year."
     private let note = "Dear future me: you made it."
+    private let answer = "See you in ten seconds."
 
     @MainActor
     func testRecordWalkthrough() throws {
@@ -83,15 +84,29 @@ final class DemoWalkthrough: XCTestCase {
         XCTAssertTrue(app.staticTexts["revealedMessage"].waitForExistence(timeout: 10))
         pause(3.6)
 
-        // 5. Quit and reopen. The home screen and launch screen in between are cut out.
-        chapter(title: "Still there after a relaunch.", sub: "Quit, reopen: both capsules come back from Postgres, knocks and all.")
+        // 5. Write back from the reveal: the reply is sealed for as long as the note waited (ten seconds).
+        chapter(title: "Then write back.",
+                sub: "Your reply is sealed for as long as the first one waited.",
+                chip: "POST /capsules  { replyTo }")
+        pause(1.4)
+        let replyField = app.textFields["replyField"]
+        tap(replyField)
+        pause(0.6)
+        type(answer, into: replyField)
+        pause(0.7)
+        tap(app.buttons["replyButton"])
+        XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 10))
+        pause(2.8)
+
+        // 6. Quit and reopen. The home screen and launch screen in between are cut out.
+        chapter(title: "Still there after a relaunch.", sub: "Quit, reopen: all three come back from Postgres, knocks and all.")
         pause(1.0)
         let relaunchStart = Date()
         app.terminate()
         app = launchApp()
         let opened = app.buttons.matching(NSPredicate(format: "identifier == 'capsuleRow' AND label CONTAINS %@", note)).firstMatch
         XCTAssertTrue(opened.waitForExistence(timeout: 20))
-        XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 2))
+        XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 3))
         waitUntilDrawn()
         cut(from: relaunchStart)
         pause(4.2)

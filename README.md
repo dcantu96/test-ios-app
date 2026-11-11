@@ -4,6 +4,8 @@ Write a message to your future self and seal it for 10 seconds, a minute, a day 
 
 The twist: **the server is the lock.** While a capsule is sealed, the API never sends its message, not even to the app. Asking early gets `423 Locked` with the seconds remaining. When the time is up, tapping the capsule cracks the wax seal open and the server reveals the message (and records when you first opened it).
 
+**Write back.** Once a capsule opens, you can answer it from the reveal. The server seals your reply for exactly as long as the original waited (a year-old letter gets a reply that opens in a year), and the list shows what it answers: "Reply to “Dear future me…”". A conversation with yourself, one capsule at a time.
+
 **Knocks.** Every early tap is a knock, and the server counts them. The locked banner says which knock it was, a sealed capsule shows its tally ("Knocked 2 times"), and when it finally opens it tells you how patient you were: "You knocked 2 times before it was time", or "No knocks. You waited."
 
 ## Layout
@@ -30,6 +32,7 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 | `GET /health` | DB check |
 | `POST /capsules` `{ message, unlockInSeconds }` | Seal a capsule (the response never includes the message) |
 | `GET /capsules` | Newest first; only opened capsules include their message |
+| `POST /capsules` `{ message, replyTo }` | Answers a capsule you've opened (`409` if you haven't); sealed for as long as the original waited |
 | `GET /capsules/:id` | `423 Locked` while sealed, and counts the knock; otherwise opens it and returns the message with its knock count |
 
 ## The e2e test
@@ -40,7 +43,8 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 2. Seal a letter for a year and tap it early. The server answers 423 and the app shows "Knock #1".
 3. Knock again: "Knock #2", and the sealed row says "Knocked 2 times".
 4. When the 10-second note is ready, open it. The seal cracks, the message is revealed, and it says "No knocks. You waited."
-5. Kill and relaunch the app. Both capsules come back from Postgres: the opened note with its message, the letter still sealed and still showing its two knocks.
+5. Write back from the reveal. The reveal closes and the reply joins the list as "Reply to …", its message hidden.
+6. Kill and relaunch the app. All three come back from Postgres: the opened note with its message, the letter still sealed and still showing its two knocks, and the reply still hiding its message.
 
 All knocking happens on the year-long letter, so nothing can unlock mid-test however slow the machine is. Each step saves a screenshot.
 

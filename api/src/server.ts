@@ -11,6 +11,8 @@ type Row = {
   unlocks_at: Date;
   opened_at: Date | null;
   knocks: number;
+  reply_to: string | null;
+  reply_to_message: string | null;
   server_now: Date;
 };
 
@@ -30,6 +32,8 @@ function present(row: Row, { reveal }: { reveal: boolean }) {
     secondsRemaining: Math.max(0, Math.ceil(remainingMs / 1000)),
     serverNow: row.server_now.toISOString(),
     knocks: row.knocks,
+    // What this capsule answers. You only reply to capsules you've opened, so that message is already yours to see.
+    replyTo: row.reply_to ? { id: row.reply_to, message: row.reply_to_message } : null,
     message: reveal && status !== "sealed" ? row.message : null,
   };
 }
@@ -61,7 +65,9 @@ class HttpError extends Error {
   }
 }
 
-const COLUMNS = "id, message, sealed_at, unlocks_at, opened_at, knocks, now() as server_now";
+const COLUMNS = `id, message, sealed_at, unlocks_at, opened_at, knocks, reply_to,
+  (select p.message from capsules p where p.id = capsules.reply_to and p.opened_at is not null) as reply_to_message,
+  now() as server_now`;
 
 export function createApp(pool: Pool): Server {
   async function route(req: IncomingMessage, res: ServerResponse) {
@@ -75,12 +81,31 @@ export function createApp(pool: Pool): Server {
 
     if (parts[0] !== "capsules" || parts.length > 2) throw new HttpError(404, "Not found");
 
-    // POST /capsules  { message, unlockInSeconds }
+    // POST /capsules  { message, unlockInSeconds }  or  { message, replyTo }
     if (req.method === "POST" && parts.length === 1) {
-      const body = (await readJson(req)) as { message?: unknown; unlockInSeconds?: unknown };
+      const body = (await readJson(req)) as { message?: unknown; unlockInSeconds?: unknown; replyTo?: unknown };
       const message = typeof body.message === "string" ? body.message.trim() : "";
-      const seconds = body.unlockInSeconds;
       if (!message || message.length > 500) throw new HttpError(400, "message must be 1-500 characters");
+
+      // A reply: only to a capsule you've opened, sealed for as long as that one waited (the server decides, not
+      // the client).
+      if (body.replyTo !== undefined) {
+        const parent = typeof body.replyTo === "string" && UUID.test(body.replyTo) ? body.replyTo : null;
+        if (!parent) throw new HttpError(404, "Capsule not found");
+        const { rows } = await pool.query<Row>(
+          `insert into capsules (message, unlocks_at, reply_to)
+           select $1, now() + (p.unlocks_at - p.sealed_at), p.id from capsules p
+           where p.id = $2 and p.opened_at is not null
+           returning ${COLUMNS}`,
+          [message, parent],
+        );
+        if (rows[0]) return send(res, 201, present(rows[0], { reveal: false }));
+        const exists = await pool.query("select 1 from capsules where id = $1", [parent]);
+        if (!exists.rows[0]) throw new HttpError(404, "Capsule not found");
+        throw new HttpError(409, "Open it before you answer it");
+      }
+
+      const seconds = body.unlockInSeconds;
       if (typeof seconds !== "number" || !Number.isInteger(seconds) || seconds < 1 || seconds > MAX_SEAL_SECONDS) {
         throw new HttpError(400, `unlockInSeconds must be an integer from 1 to ${MAX_SEAL_SECONDS}`);
       }
