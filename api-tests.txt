@@ -1,0 +1,21 @@
+
+> test
+> node --experimental-strip-types --no-warnings=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts
+
+▶ time capsules
+  ✔ health reports the database is up (28.284625ms)
+  ✔ a capsule stays sealed until its unlock time, then opens exactly once (1335.364458ms)
+  ✔ every early knock is counted, and the count is revealed with the message (1325.180125ms)
+  ✔ a capsule opened without knocking reports zero knocks (1316.716083ms)
+  ✔ an opened capsule can be answered, and the reply is sealed for as long as the original waited (1341.271625ms)
+  ✔ replying to a capsule that doesn't exist is a 404 (7.519208ms)
+  ✔ rejects bad input (17.985875ms)
+✔ time capsules (5413.126958ms)
+ℹ tests 7
+ℹ suites 1
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5704.159958
