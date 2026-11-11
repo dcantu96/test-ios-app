@@ -11,6 +11,7 @@ typing, holds, cuts). This script decodes the phone's screen from the finished M
               and no pause longer than LONG_HOLD
   typing      text appears at a person's pace (TYPE_MIN..TYPE_MAX characters a second) with no stalls
   flashes     nothing pops on screen for under a second and away again (a home screen, a white launch screen)
+  blank       no flat one-color screen (a launch screen) outside the dip at a cut
   captions    every caption stays up long enough to read
   length      the whole video stays under MAX_LENGTH
 
@@ -155,6 +156,12 @@ def check(video, rep):
                     if not any(abs(t - c) < 0.6 for c in cuts):
                         flags.append(f"flash: something pops on screen for {T(j - k):.1f}s at {t:.1f}s")
                     break
+
+    # blank screens: a launch screen or anything else that's one flat color (outside the dip at a cut)
+    for k0, k1 in runs(np.array([(np.abs(fr.astype(np.int16) - int(np.median(fr))) <= 12).mean() > 0.95 for fr in frames])):
+        a, b = T(k0), T(k1)
+        if b - a >= 0.4 and not any(a - 0.6 <= c <= b + 0.6 for c in cuts) and 0.5 < b and a < rep["duration"] - 0.7:
+            flags.append(f"blank screen: the phone shows one flat color for {b - a:.1f}s at {a:.1f}s (a launch screen?)")
 
     # captions
     for ch in rep["chapters"]:

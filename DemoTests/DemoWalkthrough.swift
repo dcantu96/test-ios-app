@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Not part of the e2e gate. A scripted walkthrough that CI records as a PR's demo video.
@@ -21,6 +22,7 @@ final class DemoWalkthrough: XCTestCase {
 
         let field = app.textFields["messageField"]
         XCTAssertTrue(field.waitForExistence(timeout: 20))
+        waitUntilDrawn()
         let rows = app.buttons.matching(identifier: "capsuleRow")
         pause(0.6)
         chapter(style: "title", kicker: "Notes to your future self", title: "Time Capsule",
@@ -82,6 +84,7 @@ final class DemoWalkthrough: XCTestCase {
         let opened = app.buttons.matching(NSPredicate(format: "identifier == 'capsuleRow' AND label CONTAINS %@", note)).firstMatch
         XCTAssertTrue(opened.waitForExistence(timeout: 20))
         XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 2))
+        waitUntilDrawn()
         cut(from: relaunchStart)
         pause(3.0)
 
@@ -126,6 +129,42 @@ final class DemoWalkthrough: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         events.append(["t": before, "kind": "shot", "until": after, "name": name])
+    }
+
+    /// On a busy Simulator the screen lags the app by seconds: XCUITest finds the app's elements while the screen
+    /// still shows the home screen or the white launch screen. Wait until the app is really on screen. This app's
+    /// backdrop is a vivid gradient (colorfulness 0.44-0.64 measured; home screen 0.22, launch screen 0.00).
+    @MainActor
+    private func waitUntilDrawn(timeout: TimeInterval = 30) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if colorfulness(XCUIScreen.main.screenshot().image) > 0.35 { return }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTFail("the app never appeared on screen")
+    }
+
+    /// Mean saturation of a 12x26 thumbnail, 0 (grey) to 1 (vivid).
+    private func colorfulness(_ image: UIImage) -> Double {
+        guard let cg = image.cgImage else { return 0 }
+        let w = 12, h = 26
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn = px.withUnsafeMutableBytes { buf -> Bool in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return 0 }
+        var total = 0.0
+        for i in 0..<(w * h) {
+            let r = Double(px[i * 4]), g = Double(px[i * 4 + 1]), b = Double(px[i * 4 + 2])
+            let hi = max(r, g, b), lo = min(r, g, b)
+            total += hi > 0 ? (hi - lo) / hi : 0
+        }
+        return total / Double(w * h)
     }
 
     private func chapter(style: String = "step", kicker: String? = nil, title: String, sub: String? = nil, chip: String? = nil) {

@@ -89,7 +89,8 @@ A demo is a short film of the change for people reviewing the PR. CI records `De
 6. **`pause()` is the only pacing, and it syncs the video.** Each `pause()` of 0.6 s or more also saves a sync screenshot, so keep at least three, spread over the walkthrough. Everything else XCUITest does (finding elements, waiting for the app to idle, slow typing) leaves the screen still, and `compose.py` trims any still stretch outside a `pause()` to a quarter second. So after every visible result, `pause()` long enough to see it (1–3 s). Never count on XCUITest's slowness for pacing.
 7. **Real waits get `fastForward(from:factor:)`**: the 10 s countdown plays at 8×, about a second. At 4× it still read as dead air.
 8. **Anything that isn't the app gets `cut(from:)`**: relaunching shows the home screen and a white launch screen. A cut drops it, with a quick dip on each side.
-9. **Aim for 45–75 s.** `review.py` flags anything over 90 s.
+9. **Wait for the app to be visible, not just present: `waitUntilDrawn()`** after every launch, before the first caption and before ending a cut. On a busy Simulator the screen lags the app by seconds: XCUITest found the text field while the screen still showed the home screen, then a white launch screen, for 6 s of the title card.
+10. **Aim for 45–75 s.** `review.py` flags anything over 90 s.
 
 ### Reviewing the finished video (every time, before calling it done)
 
@@ -104,6 +105,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 - **dead air**: no still stretch over 2 s outside a `pause()`, and none over 5 s at all
 - **typing**: 5–30 characters a second, no stall over 0.6 s
 - **flashes**: nothing pops on screen and away within a second, like a home screen or launch screen
+- **blank**: no flat one-color screen (a launch screen) outside the dip at a cut
 - **captions**: up long enough to read
 - **length**: under 90 s
 
@@ -116,6 +118,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 | Typing took 25 s for one sentence, word by word with ~3 s stalls | One `typeText` per word; each call costs ~3 s on a busy Simulator | One `type()` per message; keystrokes re-timed to ~11 a second |
 | 14 s with nothing moving before a seal, and more gaps like it | XCUITest finding elements (~5 s per tap on a busy Simulator) | Still stretches outside `pause()` trimmed to 0.25 s |
 | Home screen, then a white screen, during the relaunch | `app.terminate()` and `launch()` on camera | `cut(from:)` around the relaunch |
+| Home screen, then a white launch screen, under the title card (6 s) | The screen lags the app: XCUITest saw the field long before it was drawn | `waitUntilDrawn()` (screenshots until the app's colors show), and `review.py` flags blank screens |
 | The 10 s capsule unlocked off camera while the next note was typed | Story order copied from the e2e test | Letter first, then the 10 s note with its countdown on screen |
 | A headline ending on one word ("…when it / opens.") | Greedy line wrapping | Balanced wrapping: same line count, even lengths |
 | Star trails across the captions, reading as strikethroughs | Random trails anywhere in the sky | Trails kept out of the caption column |
