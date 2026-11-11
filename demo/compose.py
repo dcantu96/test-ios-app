@@ -472,8 +472,8 @@ def main():
         offset, conf = find_offset(changed, actions, s0)
         how = f"{len(actions)} taps and typing"
     if conf < 0.08 and not M.get("synced"):
-        print(f"sync: no clear match by {how} (best {offset:+.1f}s, confidence {conf:.2f}); using recordingStart as is")
-        offset = 0.0
+        # recordingStart is wrong by 8-40 s every run, so even a weak best guess beats it; review.py checks it.
+        print(f"sync: WEAK match by {how}: {offset:+.1f}s (confidence {conf:.2f}); check the review and sheets")
     else:
         print(f"sync: the recording runs {offset:+.1f}s from recordingStart, by {how} (confidence {conf:.2f})")
     R = lambda t: t - t0 + offset            # marker epoch -> recording time
@@ -607,10 +607,10 @@ def main():
     dip = "+".join(f"max(0\\,1-abs(t-{d:.3f})/0.18)" for d in dips) or "0"
     graph = (f"[0:v]select='gte(t\\,{lo:.4f})*lt(t\\,{hi:.4f})*not({gone})',setpts='({terms})/TB',fps={FPS},"
              f"trim=duration={dur:.3f},eq=brightness='-min(1\\,{dip})':eval=frame[v]")
-    gpath = os.path.join(work, "screen.graph")
-    open(gpath, "w").write(graph)
+    # Passed inline: -filter_complex_script is gone in ffmpeg 8+ (CI's wheel is 9.0), and its replacement
+    # (-/filter_complex) doesn't exist before 7.1. The graph is a few KB.
     screen = os.path.join(work, "screen.mp4")
-    run([FFMPEG, "-v", "error", "-y", "-i", norm, "-filter_complex_script", gpath, "-map", "[v]", "-t", f"{dur:.3f}",
+    run([FFMPEG, "-v", "error", "-y", "-i", norm, "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}",
          "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
 
     # 5. The board: background, masked screen, captions (fade + drift in), tap ripples.
