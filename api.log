@@ -1,0 +1,13 @@
+
+> start
+> node --experimental-strip-types --no-warnings=ExperimentalWarning src/main.ts
+
+Time Capsule API listening on http://127.0.0.1:8787
+GET /health -> 200 (4ms)
+GET /capsules -> 200 (58ms)
+POST /capsules -> 201 (59ms)
+POST /capsules -> 201 (9ms)
+GET /capsules/504f39ff-396f-40bd-88e0-9dc59a60939c -> 423 (35ms)
+GET /capsules/504f39ff-396f-40bd-88e0-9dc59a60939c -> 423 (4ms)
+GET /capsules/cd2135cb-92c7-49cb-a124-a015f0404072 -> 200 (8ms)
+GET /capsules -> 200 (2ms)

@@ -1,0 +1,19 @@
+
+> test
+> node --experimental-strip-types --no-warnings=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts
+
+▶ time capsules
+  ✔ health reports the database is up (13.726375ms)
+  ✔ a capsule stays sealed until its unlock time, then opens exactly once (1335.153875ms)
+  ✔ every early knock is counted, and the count is revealed with the message (1324.514583ms)
+  ✔ a capsule opened without knocking reports zero knocks (1308.110875ms)
+  ✔ rejects bad input (11.654084ms)
+✔ time capsules (4008.763417ms)
+ℹ tests 5
+ℹ suites 1
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4135.910334
