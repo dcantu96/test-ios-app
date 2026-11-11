@@ -20,7 +20,7 @@ Never put assertions that matter only in the demo, and never record video in the
 
 ## The fastest path from a feature request to a green e2e + a demo
 
-Measured on this repo: **about 5 minutes from push to both "e2e passed" and "demo posted"**, with one push. The only slow part is the Mac, so do everything you can in Linux first and push once.
+Measured on this repo: **about 5 minutes from push to both "e2e passed" and "demo posted"** on 5-CPU runners, with one push. Since the repo went public it gets GitHub's free public-repo macOS runner, **3 CPUs and 7 GB**, and the first run there took ~13 minutes (the e2e job 769 s): the fresh Simulator's churn hits 3 CPUs much harder. That's the price of free; the self-hosted Mac below would beat both. The only slow part is the Mac, so do everything you can in Linux first and push once.
 
 1. **Branch.** `git checkout -b <feature>` from `main`. Never commit to `main`.
 2. **API first, locally, in seconds.** If the feature touches the API: write the `api/test/*.test.ts` case, then the code, and run `npm test` against local Postgres (see "API work"). Get it green here; never use CI to find API bugs.
@@ -51,7 +51,7 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
 9. **Fix in one go.** If something failed, read `--log-failed` and `xcodebuild-test.log` first, fix everything you can see, then push once. Don't push to "see if it's fixed": every round is about 5 minutes and about 10 Mac minutes.
 10. The **e2e** check must be green before merging; the user merges (it can't be merged from the sandbox). A failed demo never blocks a merge, but fix the walkthrough if it broke.
 
-### Where the 5 minutes go (measured on `xcode-27`, 5 CPUs, 14 GB)
+### Where the 5 minutes go (measured on `xcode-27`, 5 CPUs, 14 GB, while the repo was private)
 
 | Step | e2e job | demo job |
 |---|---|---|
@@ -62,6 +62,7 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
 | Tests / walkthrough (on a just-booted Simulator) | 100–180 s | 120–200 s |
 | Compose MP4 + review (Simulator shut down) | | ~50–70 s |
 | **Job** | **~4.5 min** | **~5–6 min** |
+| **Job on the public-repo runner (3 CPUs, 7 GB)** | **~13 min** | **~14 min** |
 
 Before this work it was e2e ~5 min and demo ~10 min (record, then a Linux job composing for ~4 min), 593 s push-to-done; now ~290–370 s.
 
@@ -116,7 +117,8 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 |---|---|---|
 | Captions, touch circles and fast-forwards off by 9–35 s, a different amount every run | The recording's first frame comes long after simctl prints "Recording started" (an idle Simulator sends no frames), so `recordingStart` can't be trusted | `compose.py` syncs on the taps and typing: at the right offset each one changes the screen *on its own element* (a whole-screen change doesn't count) and the screen is still just before it (XCUITest waits for the app to go quiet before acting). It prints `sync: the recording runs -35.2s ... (confidence 0.25)`. Checked against five real recordings |
 | The sync was right in analysis but the video still drifted 5–27 s | Two passes seeked into the raw recording at different points, and simctl's messy timestamps put them on different timelines | One pass normalizes the recording (from 90 s before the first caption) to a clean constant-rate copy; the analysis, the cut and the saved `source/` all read that copy. `source/` + its `markers.json` reproduce the run exactly in Linux |
-| Typing still stalled and jumped after re-timing | Keystrokes were found at 10 frames a second (a 20-letter burst looked like 4 moments), and the recording was cut into pieces and joined, which rounded short pieces to nothing | Keystrokes are found at the full 60 fps, and the screen is re-timed in one frame-exact pass (one expression maps every frame's time; no pieces) |
+| Typing still stalled and jumped after re-timing | Keystrokes were found at 10 frames a second (a 20-letter burst looked like 4 moments), and the recording was cut into pieces and joined, which rounded short pieces to nothing | Keystrokes are found at the full 60 fps, and the screen is re-timed frame by frame |
+| Compose failed: "Cannot allocate memory" (PR #4) | The re-timing was one ffmpeg `select`/`setpts` expression; with three typed messages it reached ~140 stretches and ffmpeg's expression parser gave up | `compose.py` picks each output frame in Python (decode once, map each output time back to a source frame, pipe to the encoder). No limit on stretches, still frame-exact, 7–14 s |
 | Home screen flashed in the dip before the relaunch cut | The cut started the instant `terminate()` was called; the screen was already leaving | `cut(from:)` starts 0.4 s early, on the still screen |
 | Tried and dropped for sync | | Matching changes near elements without the stillness rule (an app launch and home-screen widgets fooled it); matching screenshots taken at known times (on a busy Simulator a screenshot can show the screen seconds late) |
 | Touch circles on nothing ("unintentional presses") | Same offset | Same |
@@ -133,7 +135,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 ### Tools
 
 - `scripts/run-demo.sh` (Mac): starts `simctl io recordVideo`, notes when simctl says it started (rough; `compose.py` syncs precisely), runs the `CloudSimDemo` scheme from the shared build, then pulls the `markers` attachment out of the result bundle into `out-demo/markers.json`.
-- `demo/compose.py` (needs an ffmpeg with libx264, Pillow and numpy; CI uses the static ffmpeg from the `imageio-ffmpeg` pip wheel, `FFMPEG=...`): syncs, trims dead air, applies fast-forwards and cuts, draws the board (dusk sky, phone, captions, touch circles, footer with PR, commit, device and Xcode), and encodes 1920×1080 at 60 fps. It writes `demo.report.json` beside the video. `--quality high` is x264 `veryfast` CRF 16 (visually identical to `slow`, SSIM 0.998, several times faster). It decodes each still once with the `loop` filter (`-loop 1` re-decoded the PNG every frame) and cuts the recording in one pass. `--save-source DIR` also writes the normalized recording this run analysed and its markers (CI publishes them as `source/`); composing from them reproduces the run.
+- `demo/compose.py` (needs an ffmpeg with libx264, Pillow and numpy; CI uses the static ffmpeg from the `imageio-ffmpeg` pip wheel, `FFMPEG=...`): syncs, trims dead air, applies fast-forwards and cuts, draws the board (dusk sky, phone, captions, touch circles, footer with PR, commit, device and Xcode), and encodes 1920×1080 at 60 fps. It writes `demo.report.json` beside the video. `--quality high` is x264 `veryfast` CRF 16 (visually identical to `slow`, SSIM 0.998, several times faster). It decodes each still once with the `loop` filter (`-loop 1` re-decoded the PNG every frame), and re-times the screen by picking every output frame in Python. `--save-source DIR` also writes the normalized recording this run analysed and its markers (CI publishes them as `source/`); composing from them reproduces the run.
 - `demo/review.py demo.mp4 --sheets DIR --out review.md`: the checks above, plus contact sheets.
 - **Iterate on the board, timing and sync in Linux, without a Mac:** fetch the `demo-preview/<branch>` branch, then `python3 demo/compose.py --recording source/source.mp4 --markers source/markers.json --out demo.mp4 --quality draft` (it redoes the run's sync exactly) and `python3 demo/review.py demo.mp4 --sheets sheets`. You can also edit `markers.json` by hand (format in `compose.py`'s docstring). In this sandbox, get a static ffmpeg with `python3 -m venv v && v/bin/pip install imageio-ffmpeg pillow numpy`, then `FFMPEG=$(ls v/lib/python3*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*)`. Changing the walkthrough itself needs a Mac run.
 - Re-record a PR's demo by pushing again, or `gh workflow run CI --ref <branch>` once the workflow is on `main`.
