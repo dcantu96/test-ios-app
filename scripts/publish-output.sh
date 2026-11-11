@@ -9,10 +9,11 @@ OUT="$PWD/out"
 
 STATUS="$(cat "$OUT/status.txt" 2>/dev/null || echo "Did not finish")"
 XCODE="$(head -1 "$OUT/xcode-version.txt" 2>/dev/null || echo "unknown")"
-DEVICE="$(sed -E 's/^ +//; s/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//' "$OUT/device.txt" 2>/dev/null || echo "unknown")"
+DEVICE="$(sed -E 's/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//; s/^ +//; s/ +$//' "$OUT/device.txt" 2>/dev/null || echo "unknown")"
 RUNTIME="$(cat "$OUT/runtime.txt" 2>/dev/null || echo "unknown")"
 POSTGRES="$(cut -d' ' -f1-2 "$OUT/postgres-version.txt" 2>/dev/null || echo "unknown")"
-API_TESTS="$(grep -E '^# (pass|fail) ' "$OUT/api-tests.txt" 2>/dev/null | tr '\n' ' ' || true)"
+# Node's test runner prints "ℹ pass 3" (spec reporter) or "# pass 3" (TAP).
+API_TESTS="$(grep -E '^(#|ℹ) (pass|fail) ' "$OUT/api-tests.txt" 2>/dev/null | sed -E 's/^(#|ℹ) //' | paste -sd ',' - | sed 's/,/, /g' || true)"
 RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
 WORK="$(mktemp -d)"

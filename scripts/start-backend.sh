@@ -14,18 +14,19 @@ fi
 PG="$(brew --prefix postgresql@17)/bin"
 "$PG/initdb" -D "$TMP/pgdata" -A trust -U postgres >/dev/null
 "$PG/pg_ctl" -D "$TMP/pgdata" -l "$TMP/postgres.log" -o "-p 5432 -k $TMP" -w start
-"$PG/createdb" -h 127.0.0.1 -U postgres capsules
+"$PG/createdb" -h 127.0.0.1 -U postgres capsules        # used by the app
+"$PG/createdb" -h 127.0.0.1 -U postgres capsules_test   # used by the API tests only
 "$PG/psql" -h 127.0.0.1 -U postgres -tAc "select version()" | tee "$OUT/postgres-version.txt"
 echo "::endgroup::"
-
-export DATABASE_URL="postgres://postgres@127.0.0.1:5432/capsules"
-echo "DATABASE_URL=$DATABASE_URL" >> "${GITHUB_ENV:-/dev/null}"
 
 echo "::group::API tests"
 cd api
 npm ci --no-fund --no-audit
-npm test 2>&1 | tee "$OUT/api-tests.txt"
+DATABASE_URL="postgres://postgres@127.0.0.1:5432/capsules_test" npm test 2>&1 | tee "$OUT/api-tests.txt"
 echo "::endgroup::"
+
+export DATABASE_URL="postgres://postgres@127.0.0.1:5432/capsules"
+echo "DATABASE_URL=$DATABASE_URL" >> "${GITHUB_ENV:-/dev/null}"
 
 echo "::group::Start API"
 nohup npm start > "$OUT/api.log" 2>&1 &
