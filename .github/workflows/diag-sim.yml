@@ -26,10 +26,16 @@ jobs:
           T0=$(date +%s); bash scripts/build.sh >/dev/null; stamp "build (no Simulator running)"
           T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"
           echo "=== services before:"; xcrun simctl spawn "$SIM_UDID" launchctl list | tail -n +2 | awk '{print $3}' | sort | tr '\n' ' ' | cut -c1-6000; echo
-          bash scripts/sim-quiet.sh "$SIM_UDID"; stamp "quieted"
-          watch 8
+          bash scripts/sim-quiet.sh "$SIM_UDID"; stamp "quieted (one shell)"
+          watch 6
+          D=~/Library/Developer/CoreSimulator/Devices/$SIM_UDID/data
+          echo "=== where launchd keeps 'disabled':"; grep -rla "amsengagementd" "$D/private/var/db" "$D/Library" 2>/dev/null | head -5
+          for f in $(grep -rla "amsengagementd" "$D/private/var/db" 2>/dev/null | head -2); do echo "--- $f"; plutil -p "$f" 2>/dev/null | head -8; done
+          xcrun simctl shutdown "$SIM_UDID"; sleep 3
+          echo "=== reboot with those services disabled from the start"
+          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"
+          watch 6
           T0=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e.log 2>&1; stamp "e2e exit $?"
           grep -E "Test Case.*(passed|failed)" /tmp/e2e.log | head -2
           grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -2
-          grep -E "error|failed" out/xcodebuild-test.log | head -5
           echo "TOTAL job-work: $(( $(date +%s) - TJ ))s"
