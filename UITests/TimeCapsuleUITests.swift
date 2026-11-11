@@ -41,8 +41,8 @@ final class TimeCapsuleUITests: XCTestCase {
         yearLong.tap()
         // The banner shows for 4 s: wait for the banner with the right text in one query, not exists-then-read.
         XCTAssertTrue(lockedBanner("Knock #1").waitForExistence(timeout: 10), "server didn't refuse an early open as knock #1")
+        snap("3 Server refused to open the year-long capsule") // first: the banner only shows for 4 s
         XCTAssertFalse(rowShowing(letter).exists, "a refused capsule must not show its message")
-        snap("3 Server refused to open the year-long capsule")
 
         // 4. Knock again: the server counts it, and the sealed row says so.
         yearLong.tap()

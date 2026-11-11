@@ -503,7 +503,9 @@ def main():
             continue
         step = (e["chars"] / TYPE_RATE) / (len(rs) - 1)
         for r0, r1 in zip(rs, rs[1:]):
-            explicit.append((r0, r1, max(0.12, min(8.0, (r1 - r0) / step)), False))  # XCUITest can type 30+ a second
+            # Up to 40x faster: on a busy Simulator one letter can take over a second, and between letters only
+            # the cursor blinks. (8x left the first message at 4 a second.) Down to 0.12x: XCUITest can type 30+ a second.
+            explicit.append((r0, r1, max(0.12, min(40.0, (r1 - r0) / step)), False))
     explicit.sort()
     clean = []
     for a, b, f, dip in explicit:  # no overlaps
