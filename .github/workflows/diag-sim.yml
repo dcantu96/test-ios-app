@@ -1,0 +1,27 @@
+name: Diag Simulator boot
+
+# Temporary: measures what a Simulator boot spends its time on. Runs on pushes to diag/* branches.
+on:
+  push:
+    branches: ["diag/**"]
+
+jobs:
+  boot:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Measure
+        run: |
+          set -x
+          NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env; wait || true
+          for d in ~/Library/Developer/CoreSimulator/Caches /Library/Developer/CoreSimulator/Caches ~/Library/Developer/CoreSimulator/Volumes /Library/Developer/CoreSimulator/Volumes; do echo "BEFORE $d"; sudo du -sh "$d"/* 2>/dev/null | head; done
+          ( for i in 1 2 3 4 5 6 7 8; do sleep 15; echo "--- top at +$((i*15))s"; top -l 1 -o cpu -n 6 -stats pid,command,cpu | tail -7; done ) &
+          T=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; echo "FIRST BOOT: $(( $(date +%s) - T ))s"
+          kill %1 2>/dev/null || true
+          for d in ~/Library/Developer/CoreSimulator/Caches /Library/Developer/CoreSimulator/Caches; do echo "AFTER $d"; sudo du -sh "$d"/* 2>/dev/null | head; sudo find "$d" -maxdepth 5 -size +20M 2>/dev/null | head; done
+          xcrun simctl shutdown "$SIM_UDID"
+          T=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; echo "SECOND BOOT (same device): $(( $(date +%s) - T ))s"
+          NEW=$(xcrun simctl create "Second" "$(xcrun simctl list devices -j | python3 -c "import json,sys; d=[x for v in json.load(sys.stdin)['devices'].values() for x in v if x['udid']=='$SIM_UDID'][0]; print(d['deviceTypeIdentifier'])")" "$(xcrun simctl list devices -j | python3 -c "import json,sys; print([k for k,v in json.load(sys.stdin)['devices'].items() if any(x['udid']=='$SIM_UDID' for x in v)][0])")")
+          T=$(date +%s); xcrun simctl bootstatus "$NEW" -b >/dev/null; echo "NEW DEVICE BOOT: $(( $(date +%s) - T ))s"
+          du -sh ~/Library/Developer/CoreSimulator/Devices/$SIM_UDID ~/Library/Developer/CoreSimulator/Devices/$NEW

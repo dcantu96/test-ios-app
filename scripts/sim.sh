@@ -54,7 +54,7 @@ PY
   xcrun simctl list devices | grep "$SIM_UDID" | tee "$OUT/device.txt"
   # simctl boot blocks until the device is up, so it goes to the background; `wait` joins it later.
   date +%s > "$OUT/boot-started-at"
-  nohup xcrun simctl boot "$SIM_UDID" > "$OUT/boot.log" 2>&1 &
+  [ "${NO_BOOT:-0}" = "1" ] || nohup xcrun simctl boot "$SIM_UDID" > "$OUT/boot.log" 2>&1 &
   echo "SIM_UDID=$SIM_UDID" | tee "$OUT/sim.env"
   cat "$OUT/sim.env" >> "${GITHUB_ENV:-/dev/null}"
   exit 0
