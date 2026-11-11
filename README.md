@@ -4,6 +4,8 @@ Write a message to your future self and seal it for 10 seconds, a minute, a day 
 
 The twist: **the server is the lock.** While a capsule is sealed, the API never sends its message, not even to the app. Asking early gets `423 Locked` with the seconds remaining. When the time is up, tapping the capsule cracks the wax seal open and the server reveals the message (and records when you first opened it).
 
+**Write back.** Once a capsule opens, you can answer it from the reveal. The server seals your reply for exactly as long as the original waited (a year-old letter gets a reply that opens in a year), and the list shows what it answers: "Reply to “Dear future me…”". A conversation with yourself, one capsule at a time.
+
 **Knocks.** Every early tap is a knock, and the server counts them. The locked banner says which knock it was, a sealed capsule shows its tally ("Knocked 2 times"), and when it finally opens it tells you how patient you were: "You knocked 2 times before it was time", or "No knocks. You waited."
 
 ## Layout
@@ -12,7 +14,7 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 |---|---|
 | `App/` | SwiftUI app (iOS 26+ SDK, Liquid Glass). Reads the API from `API_URL`, defaulting to `http://localhost:8787` |
 | `UITests/` | XCUITest end-to-end suite: the merge gate |
-| `DemoTests/` | A human-paced walkthrough that CI records as each PR's demo video (not a test gate) |
+| `DemoTests/` | Each PR's demo scene (showing only that PR's change), plus the kit it's written with; CI records it as the PR's video (not a test gate) |
 | `demo/compose.py` | Turns a Simulator recording plus the walkthrough's markers into a 1080p60 MP4 |
 | `api/` | Node 24 + TypeScript API (`node:http` + `pg`), SQL migrations, `node --test` integration tests |
 | `scripts/start-backend.sh` | Starts Postgres 17, runs the API tests, starts the API |
@@ -30,6 +32,7 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 | `GET /health` | DB check |
 | `POST /capsules` `{ message, unlockInSeconds }` | Seal a capsule (the response never includes the message) |
 | `GET /capsules` | Newest first; only opened capsules include their message |
+| `POST /capsules` `{ message, replyTo }` | Answers a capsule you've opened (`409` if you haven't); sealed for as long as the original waited |
 | `GET /capsules/:id` | `423 Locked` while sealed, and counts the knock; otherwise opens it and returns the message with its knock count |
 
 ## The e2e test
@@ -40,7 +43,8 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 2. Seal a letter for a year and tap it early. The server answers 423 and the app shows "Knock #1".
 3. Knock again: "Knock #2", and the sealed row says "Knocked 2 times".
 4. When the 10-second note is ready, open it. The seal cracks, the message is revealed, and it says "No knocks. You waited."
-5. Kill and relaunch the app. Both capsules come back from Postgres: the opened note with its message, the letter still sealed and still showing its two knocks.
+5. Write back from the reveal. The reveal closes and the reply joins the list as "Reply to …", its message hidden.
+6. Kill and relaunch the app. All three come back from Postgres: the opened note with its message, the letter still sealed and still showing its two knocks, and the reply still hiding its message.
 
 All knocking happens on the year-long letter, so nothing can unlock mid-test however slow the machine is. Each step saves a screenshot.
 
@@ -49,7 +53,7 @@ All knocking happens on the year-long letter, so nothing can unlock mid-test how
 One workflow (`.github/workflows/e2e.yml`, "CI") runs on every PR into `main` and every push to `main`, on two of GitHub's `xcode-27` macOS runners in parallel:
 
 - **e2e**: API tests against Postgres, then the e2e suite in the newest iOS Simulator against the live API. It's the check that has to pass before merging. Screenshots and logs go to `e2e-output/<branch>`.
-- **demo** (PRs): records the walkthrough, composes it into `demo.mp4` (1080p60) on the same Mac, checks it (`demo/review.py`: sync, dead air, typing pace, flashes, caption time), and comments on the PR with the link and the review. The video, review, contact sheets and synced source live on `demo-preview/<branch>`.
+- **demo** (PRs): records a short scene of just that PR's change, composes it into `demo.mp4` (1080p60) on the same Mac, checks it (`demo/review.py`: sync, dead air, typing pace, flashes, caption time), and comments on the PR with the link and the review. The video, review, contact sheets and synced source live on `demo-preview/<branch>`.
 
 `cleanup.yml` deletes a PR's `demo-preview/` and `e2e-output/` branches when it closes. A push takes about 5 minutes to a green e2e and a posted demo; CLAUDE.md has the measurements and why it's laid out this way.
 

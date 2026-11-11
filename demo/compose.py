@@ -22,6 +22,7 @@ markers.json:
     {"t": <epoch>, "kind": "cut", "until": <epoch>},                # drop this stretch (a quick dip hides the join)
     {"t": <epoch>, "kind": "end"}
   ],
+  "slowmo": 4,                         # optional: the app ran its animations 4x slower; moving stretches play 4x
   "synced": true                       # optional: recordingStart is exact, skip the automatic sync
 }
 
@@ -36,6 +37,7 @@ What it fixes on its own (see "Demo videos" in CLAUDE.md for why):
   a quarter second. Each chapter keeps enough time to read its caption.
 """
 import argparse
+import bisect
 import json
 import math
 import os
@@ -536,8 +538,28 @@ def main():
             else:
                 k += 1
 
+    # Slow motion (markers "slowmo": k): the app ran its animations k times slower so the Simulator could draw
+    # k times more frames into each. Play every moving stretch back k times faster, except typing (re-timed above)
+    # and explicit fast-forwards and cuts.
+    slow = float(M.get("slowmo", 1) or 1)
+    motion = []
+    if slow > 1:
+        busy = sorted([(a, b) for a, b, _, _ in explicit] + [(ta, tb) for ta, tb, _ in typing])
+        k, n = K(start), min(len(moving), K(end))
+        while k < n:
+            if moving[k] >= STATIC_FRAC:
+                j = k
+                while j < n and moving[j] >= STATIC_FRAC:
+                    j += 1
+                for p0, p1 in subtract((s0 + k / AN_FPS - 0.1, s0 + j / AN_FPS + 0.05), busy):
+                    if p1 - p0 > 0.05:
+                        motion.append((p0, p1, slow, False))
+                k = j
+            else:
+                k += 1
+
     def segments():
-        return build_segments(start, end, explicit + [(a, b, 0, False) for a, b in trims if b > a])
+        return build_segments(start, end, explicit + motion + [(a, b, 0, False) for a, b in trims if b > a])
 
     # Every chapter keeps time to read its caption: give back trimmed time (latest first) where it's short.
     ch_r = [R(c["t"]) for c in chapters] + [end]
@@ -598,22 +620,53 @@ def main():
     #    raw timestamps (trim, select) see the wrong frames. Seeking on the input is reliable, and after fps= the
     #    timestamps are clean: so one pass seeks to `start`, fixes the rate, scales to the phone's screen, then cuts
     #    and fast-forwards. A cut dips the screen to black for a moment on each side, like an app switch.
-    # Every frame gets its output time from one expression of its own time (select drops what's cut, setpts places
-    # the rest, fps repeats frames to fill slowed-down stretches). Frame-exact: cutting the recording into pieces
-    # and joining them rounded short pieces to nothing, which made re-timed typing jump.
+    # Every output frame is picked from the normalized recording in Python: decode once, and for each output frame
+    # take the source frame its time maps back to (fast-forwards skip frames, slowed typing repeats them, cuts are
+    # never shown), then pipe it to the encoder. Frame-exact, with no limit on the number of re-timed stretches.
+    # (Before: one ffmpeg select/setpts expression, which ffmpeg's parser refused once a demo had ~140 stretches:
+    # "Cannot allocate memory". And before that, cutting into pieces and joining them rounded short pieces away.)
+    import numpy as np
     keep = [x for x in segs if x[2]]
-    terms = "+".join(f"gte(T\\,{a - s0:.4f})*lt(T\\,{b - s0:.4f})*({warp(segs, a):.4f}+(T-{a - s0:.4f})/{f:.5f})" for a, b, f, _ in keep)
-    gone = "+".join(f"gte(t\\,{a - s0:.4f})*lt(t\\,{b - s0:.4f})" for a, b, f, _ in segs if not f) or "0"
-    lo, hi = segs[0][0] - s0, segs[-1][1] - s0
+    starts = [warp(segs, a) for a, b, f, _ in keep]
     dips = [warp(segs, a) for a, b, f, dip in segs if dip and not f]
-    dip = "+".join(f"max(0\\,1-abs(t-{d:.3f})/0.18)" for d in dips) or "0"
-    graph = (f"[0:v]select='gte(t\\,{lo:.4f})*lt(t\\,{hi:.4f})*not({gone})',setpts='({terms})/TB',fps={FPS},"
-             f"trim=duration={dur:.3f},eq=brightness='-min(1\\,{dip})':eval=frame[v]")
-    # Passed inline: -filter_complex_script is gone in ffmpeg 8+ (CI's wheel is 9.0), and its replacement
-    # (-/filter_complex) doesn't exist before 7.1. The graph is a few KB.
+    n_out = int(round(dur * FPS))
+
+    def source_time(t):
+        i = max(0, bisect.bisect_right(starts, t) - 1)
+        a, b, f, _ = keep[i]
+        return min(b, a + (t - starts[i]) * f)
+
+    frame_bytes = SCREEN_W * SCREEN_H * 3
+    dec = subprocess.Popen([FFMPEG, "-v", "error", "-i", norm, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL)  # it's stopped early once the video is done: "Broken pipe" is expected
     screen = os.path.join(work, "screen.mp4")
-    run([FFMPEG, "-v", "error", "-y", "-i", norm, "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}",
-         "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
+    enc_p = subprocess.Popen([FFMPEG, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{SCREEN_W}x{SCREEN_H}",
+                              "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen],
+                             stdin=subprocess.PIPE)
+    import time as _time
+    t_start = _time.time()
+    have, frame = -1, None
+    for i in range(n_out):
+        t = i / FPS
+        want = int(round((source_time(t) - s0) * FPS))
+        while have < want:
+            buf = dec.stdout.read(frame_bytes)
+            if len(buf) < frame_bytes:
+                break  # the recording ended: hold the last frame
+            frame, have = buf, have + 1
+        if frame is None:
+            sys.exit("compose: the recording has no frames in the selected range")
+        out = frame
+        d = max([0.0] + [1 - abs(t - x) / 0.18 for x in dips])
+        if d > 0:  # the dip to black at a cut
+            out = (np.frombuffer(frame, np.uint8).astype(np.float32) * (1 - min(1.0, d))).astype(np.uint8).tobytes()
+        enc_p.stdin.write(out)
+    enc_p.stdin.close()
+    dec.stdout.close()
+    dec.kill()
+    if enc_p.wait() != 0:
+        sys.exit("compose: encoding the screen failed")
+    print(f"  screen: {_time.time() - t_start:.1f}s", flush=True)
 
     # 5. The board: background, masked screen, captions (fade + drift in), tap ripples.
     #    Every still is decoded once and repeated with the loop filter: "-loop 1" would decode the PNG again for
@@ -678,6 +731,7 @@ def main():
         "holds": [[warp(segs, a), warp(segs, b)] for a, b in holds + given],
         "cuts": [warp(segs, a) for a, b, f, dip in explicit if not f],
         "fastForwards": [[warp(segs, a), warp(segs, b), f] for a, b, f, dip in explicit if f],
+        "slowmo": slow,
     }
     json.dump(report, open(os.path.splitext(args.out)[0] + ".report.json", "w"), indent=1)
 

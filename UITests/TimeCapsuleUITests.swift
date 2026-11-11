@@ -13,10 +13,11 @@ final class TimeCapsuleUITests: XCTestCase {
     }
 
     @MainActor
-    func testSealKnockEarlyWaitThenReveal() throws {
+    func testSealKnockWaitRevealAndWriteBack() throws {
         let tag = String(UUID().uuidString.prefix(6))
         let secret = "Dear future me, remember tonight (\(tag))"
         let letter = "Open this next year (\(tag))"
+        let answer = "Got it, thanks (\(tag))"
         app = launchApp()
 
         // 1. The compose card is up and the vault (API) is reachable.
@@ -44,7 +45,9 @@ final class TimeCapsuleUITests: XCTestCase {
         snap("3 Server refused to open the year-long capsule") // first: the banner only shows for 4 s
         XCTAssertFalse(rowShowing(letter).exists, "a refused capsule must not show its message")
 
-        // 4. Knock again: the server counts it, and the sealed row says so.
+        // 4. Knock again: the server counts it, and the sealed row says so. Wait for the first banner to go first:
+        //    when it hides, the list moves up, and a tap aimed while it moves misses the row (PR #4, 3-CPU runner).
+        XCTAssertTrue(lockedBanner("Knock #1").waitForNonExistence(timeout: 15), "the first banner never went away")
         yearLong.tap()
         XCTAssertTrue(lockedBanner("Knock #2").waitForExistence(timeout: 10), "the second knock wasn't counted")
         XCTAssertTrue(rowShowing("Knocked 2 times").waitForExistence(timeout: 10), "the sealed row doesn't show the knocks")
@@ -63,16 +66,34 @@ final class TimeCapsuleUITests: XCTestCase {
         sleep(1) // let the crack-open animation settle for the screenshot
         snap("6 Seal cracked, message revealed")
 
-        // 6. Kill and relaunch: both capsules come back from Postgres, the opened one with its message,
-        //    the year-long one still sealed, still without its message, and still counting its two knocks.
+        // 7. Write back from the reveal. The server seals the reply for as long as the original waited (10 s).
+        //    Not racing the clock: the reply may already be ready by the time we look, so we only check what's
+        //    true either way (it's listed as a reply, and its message stays hidden until someone opens it).
+        let replyField = app.textFields["replyField"]
+        XCTAssertTrue(replyField.waitForExistence(timeout: 10), "no way to write back from the reveal")
+        replyField.tap()
+        replyField.typeText(answer)
+        app.buttons["replyButton"].tap()
+        XCTAssertTrue(revealed.waitForNonExistence(timeout: 10), "the reveal didn't close after sealing the reply")
+        let replyRow = rowShowing("Reply to")
+        XCTAssertTrue(replyRow.waitForExistence(timeout: 10), "the reply isn't in the list")
+        XCTAssertTrue(waitFor(rows, count: 3), "the reply should be a third capsule")
+        XCTAssertFalse(rowShowing(answer).exists, "a reply must stay sealed like any capsule")
+        snap("7 Wrote back, sealed for as long as the first one waited")
+
+        // 8. Kill and relaunch: all three come back from Postgres. The opened note with its message, the year-long
+        //    letter still sealed with its two knocks, and the reply still hiding its message.
         app.terminate()
         app = launchApp()
-        XCTAssertTrue(rowShowing(secret).waitForExistence(timeout: 20), "opened capsule didn't survive a relaunch")
-        XCTAssertTrue(waitFor(rows, count: 2), "a capsule went missing after the relaunch")
-        XCTAssertEqual(rows.firstMatch.value as? String, "sealed")
-        XCTAssertTrue(rowShowing("Knocked 2 times").waitForExistence(timeout: 10), "the knocks weren't kept in Postgres")
+        XCTAssertTrue(openedRow(secret).waitForExistence(timeout: 20), "opened capsule didn't survive a relaunch")
+        XCTAssertTrue(waitFor(rows, count: 3), "a capsule went missing after the relaunch")
+        let knocked = rowShowing("Knocked 2 times")
+        XCTAssertTrue(knocked.waitForExistence(timeout: 10), "the knocks weren't kept in Postgres")
+        XCTAssertEqual(knocked.value as? String, "sealed")
+        XCTAssertTrue(rowShowing("Reply to").exists, "the reply didn't survive a relaunch")
         XCTAssertFalse(rowShowing(letter).exists, "the year-long capsule leaked its message after a relaunch")
-        snap("7 After relaunch, loaded from Postgres")
+        XCTAssertFalse(rowShowing(answer).exists, "the reply leaked its message after a relaunch")
+        snap("8 After relaunch, loaded from Postgres")
     }
 
     // MARK: - Helpers
@@ -105,6 +126,13 @@ final class TimeCapsuleUITests: XCTestCase {
     @MainActor
     private func lockedBanner(_ text: String) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "identifier == 'lockedBanner' AND label CONTAINS %@", text)).firstMatch
+    }
+
+    /// A capsule that has been opened and shows this text. (A reply quotes what it answers, so "shows the text"
+    /// alone would also match the reply.)
+    @MainActor
+    private func openedRow(_ text: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == 'capsuleRow' AND value == 'opened' AND label CONTAINS %@", text)).firstMatch
     }
 
     @MainActor

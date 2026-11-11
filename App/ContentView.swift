@@ -36,8 +36,8 @@ struct ContentView: View {
                     capsuleList
                 }
                 .padding()
-                .animation(.snappy, value: store.lockedNotice)
-                .animation(.snappy, value: store.capsules)
+                .animation(.snappy.paced, value: store.lockedNotice)
+                .animation(.snappy.paced, value: store.capsules)
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Backdrop())
@@ -45,7 +45,7 @@ struct ContentView: View {
             .refreshable { await store.refresh() }
             .task { await store.refresh() }
             .sheet(item: $store.revealed) { capsule in
-                RevealView(capsule: capsule)
+                RevealView(capsule: capsule, store: store)
             }
         }
     }
@@ -156,6 +156,12 @@ struct CapsuleRow: View {
                                     .contentTransition(.numericText())
                             }
                         }
+                        if let parent = capsule.replyTo {
+                            Text("\(Image(systemName: "arrowshape.turn.up.left.fill")) Reply to \u{201C}\(parent.message ?? "an earlier capsule")\u{201D}")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -204,7 +210,12 @@ struct WaxSeal: View {
 
 struct RevealView: View {
     let capsule: Capsule
+    let store: CapsuleStore
     @State private var cracked = false
+    @State private var reply = ""
+    @State private var sending = false
+    @State private var detent: PresentationDetent = .medium
+    @FocusState private var writing: Bool
 
     var body: some View {
         ZStack {
@@ -227,6 +238,36 @@ struct RevealView: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Color(red: 0.62, green: 0.08, blue: 0.12))
                     .accessibilityIdentifier("knockVerdict")
+
+                // Write back: the reply is sealed for as long as this capsule waited.
+                HStack(spacing: 10) {
+                    TextField("Write back\u{2026}", text: $reply)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(.background.opacity(0.6), in: .rect(cornerRadius: 12))
+                        .focused($writing)
+                        .submitLabel(.send)
+                        .onSubmit { sendReply() }
+                        .accessibilityIdentifier("replyField")
+
+                    Button {
+                        sendReply()
+                    } label: {
+                        Image(systemName: "seal.fill")
+                            .font(.title3)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(Color(red: 0.62, green: 0.08, blue: 0.12))
+                    .disabled(reply.trimmingCharacters(in: .whitespaces).isEmpty || sending)
+                    .accessibilityLabel("Seal reply")
+                    .accessibilityIdentifier("replyButton")
+                }
+                .padding(.top, 6)
+
+                Text("Your reply stays sealed as long as this one did.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             .padding(28)
             .frame(maxWidth: .infinity)
@@ -244,13 +285,26 @@ struct RevealView: View {
                 .rotationEffect(.degrees(cracked ? 35 : 0))
                 .opacity(cracked ? 0 : 1)
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large], selection: $detent)
         .presentationBackground(.thinMaterial)
         .sensoryFeedback(.success, trigger: cracked)
+        .onChange(of: writing) { _, isWriting in
+            // Room above the keyboard for the message and the reply field.
+            if isWriting { withAnimation(.snappy.paced) { detent = .large } }
+        }
         .onAppear {
-            withAnimation(.spring(duration: 0.9, bounce: 0.3).delay(0.35)) {
+            withAnimation(.spring(duration: 0.9, bounce: 0.3).delay(0.35).paced) {
                 cracked = true
             }
+        }
+    }
+
+    private func sendReply() {
+        guard !sending, !reply.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        sending = true
+        Task {
+            _ = await store.reply(to: capsule, message: reply)
+            sending = false
         }
     }
 }

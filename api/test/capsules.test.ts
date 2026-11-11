@@ -106,6 +106,42 @@ describe("time capsules", () => {
     assert.equal(opened.body.knocks, 0);
   });
 
+  test("an opened capsule can be answered, and the reply is sealed for as long as the original waited", async () => {
+    const original = await call("/capsules", { method: "POST", body: { message: `first ${Date.now()}`, unlockInSeconds: 1 } });
+    assert.equal(original.body.replyTo, null);
+
+    const tooSoon = await call("/capsules", { method: "POST", body: { message: "too soon", replyTo: original.body.id } });
+    assert.equal(tooSoon.status, 409, "you can only answer a capsule you've opened");
+
+    await sleep(1_300);
+    const opened = await call(`/capsules/${original.body.id}`);
+    assert.equal(opened.status, 200);
+
+    const reply = await call("/capsules", {
+      method: "POST",
+      body: { message: "got it, see you later", replyTo: original.body.id, unlockInSeconds: 999_999 },
+    });
+    assert.equal(reply.status, 201);
+    assert.equal(reply.body.status, "sealed");
+    assert.equal(reply.body.message, null, "a reply is sealed like any capsule");
+    const span = (Date.parse(reply.body.unlocksAt) - Date.parse(reply.body.sealedAt)) / 1000;
+    assert.ok(Math.abs(span - 1) < 0.01, `the server sets the span from the original (got ${span}s), ignoring the client's`);
+    assert.deepEqual(reply.body.replyTo, { id: original.body.id, message: opened.body.message });
+
+    const listed = ((await call("/capsules")).body as unknown as any[]).find((c) => c.id === reply.body.id);
+    assert.deepEqual(listed.replyTo, { id: original.body.id, message: opened.body.message }, "the list shows what it answers");
+    assert.equal(listed.message, null);
+  });
+
+  test("replying to a capsule that doesn't exist is a 404", async () => {
+    const res = await call("/capsules", {
+      method: "POST",
+      body: { message: "hello?", replyTo: "00000000-0000-4000-8000-000000000000" },
+    });
+    assert.equal(res.status, 404);
+    assert.equal((await call("/capsules", { method: "POST", body: { message: "x", replyTo: "nope" } })).status, 404);
+  });
+
   test("rejects bad input", async () => {
     assert.equal((await call("/capsules", { method: "POST", body: { message: "", unlockInSeconds: 10 } })).status, 400);
     assert.equal((await call("/capsules", { method: "POST", body: { message: "x".repeat(501), unlockInSeconds: 10 } })).status, 400);

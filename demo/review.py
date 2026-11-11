@@ -12,6 +12,8 @@ typing, holds, cuts). This script decodes the phone's screen from the finished M
   typing      text appears at a person's pace (TYPE_MIN..TYPE_MAX characters a second) with no stalls
   flashes     nothing pops on screen for under a second and away again (a home screen, a white launch screen)
   blank       no flat one-color screen (a launch screen) outside the dip at a cut
+  not the app the phone shows the app (or its sheets), never the home screen
+  smoothness  animations show at least SMOOTH_MIN distinct frames a second (a busy Mac drops frames)
   captions    every caption stays up long enough to read
   length      the whole video stays under MAX_LENGTH
 
@@ -37,7 +39,8 @@ DEAD_AIR = 2.0      # s of unchanging screen outside a pause
 LONG_HOLD = 5.0     # s of unchanging screen even inside a pause
 TYPE_MIN, TYPE_MAX = 5.0, 30.0   # characters a second
 TYPE_STALL = 0.6    # s without a keystroke while typing
-MAX_LENGTH = 90.0   # s
+SMOOTH_MIN = 24     # distinct frames a second while things move
+MAX_LENGTH = 60.0   # s: a demo shows one change; longer means it's touring the app
 STATIC = 0.002
 PIX = 14
 
@@ -49,6 +52,39 @@ def screen_frames(video, box, w=144):
                           "-f", "rawvideo", "-"], check=True, capture_output=True).stdout
     n = len(raw) // (w * h)
     return np.frombuffer(raw[: n * w * h], dtype=np.uint8).reshape(n, h, w)
+
+
+def motion_fps(video, rep):
+    """Median distinct frames a second over half-seconds where the phone moves, outside typing and fast-forwards."""
+    x, y, sw, sh = rep["screen"]
+    raw = subprocess.run([compose.FFMPEG, "-v", "error", "-i", video, "-vf",
+                          f"fps=60,crop={sw}:{sh}:{x}:{y},scale=96:208:flags=area,format=gray", "-f", "rawvideo", "-"],
+                         check=True, capture_output=True).stdout
+    f = np.frombuffer(raw, np.uint8).reshape(-1, 208, 96).astype(np.int16)
+    d = np.abs(np.diff(f, axis=0)).mean(axis=(1, 2))
+    skip = [(t["start"] - 0.3, t["end"] + 0.3) for t in rep.get("typing", [])] + \
+           [(a - 0.3, b + 0.3) for a, b, _ in rep.get("fastForwards", [])] + \
+           [(c - 0.6, c + 0.6) for c in rep.get("cuts", [])] + [(0, 0.6), (rep["duration"] - 0.8, 1e9)]
+    rates = []
+    for i in range(0, len(d) - 30, 30):
+        t = i / 60
+        if any(a <= t <= b or a <= t + 0.5 <= b for a, b in skip):
+            continue
+        seg = d[i:i + 30]
+        if (seg > 0.3).sum() >= 3:
+            rates.append(int((seg > 0.05).sum() * 2))
+    return float(np.median(rates)) if rates else None
+
+
+def app_look(video, box):
+    """Per half second: mean saturation and share of near-white pixels on the phone's screen."""
+    x, y, sw, sh = box
+    raw = subprocess.run([compose.FFMPEG, "-v", "error", "-i", video, "-vf", f"fps=2,crop={sw}:{sh}:{x}:{y},scale=48:104:flags=area",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+    a = np.frombuffer(raw, np.uint8).reshape(-1, 104, 48, 3).astype(np.float32)
+    hi, lo = a.max(-1), a.min(-1)
+    sat = np.where(hi > 0, (hi - lo) / np.maximum(hi, 1), 0).mean(axis=(1, 2))
+    return sat, (lo > 215).mean(axis=(1, 2))
 
 
 def region(changed, e, grow=0.05):
@@ -162,6 +198,29 @@ def check(video, rep):
         a, b = T(k0), T(k1)
         if b - a >= 0.4 and not any(a - 0.6 <= c <= b + 0.6 for c in cuts) and 0.5 < b and a < rep["duration"] - 0.7:
             flags.append(f"blank screen: the phone shows one flat color for {b - a:.1f}s at {a:.1f}s (a launch screen?)")
+
+    # not the app: the phone must show this app (vivid gradient, or one of its white sheets), not the home screen
+    # or another app. Measured on real videos: app 0.40-0.65 saturation, its sheets 0.4-0.85 white, the home
+    # screen 0.24 saturation and 0.04 white. (PR #4's video ended on 8 s of home screen and nothing else noticed.)
+    sat, white = app_look(video, rep["screen"])
+    looks_wrong = np.array([sv < 0.35 and wv < 0.3 for sv, wv in zip(sat, white)])
+    for k0, k1 in runs(looks_wrong):
+        a, b = k0 / 2, min(k1 / 2, rep["duration"] - 0.8)  # the closing fade doesn't count
+        for c in cuts:  # neither does the half-second dip to black at a cut
+            if a - 0.5 <= c <= a + 0.5:
+                a = max(a, c + 0.5)
+        if b - a >= 1.0:
+            flags.append(f"not the app: the phone shows something else (home screen?) for {b - a:.1f}s at {a:.1f}s")
+    notes.append(f"app on screen: {100 * (1 - looks_wrong.mean()):.0f}% of the video")
+
+    # smoothness: how many distinct frames a second the phone shows while something moves at normal speed (not
+    # typing, which is re-timed, and not fast-forwards). The Simulator drops frames when the Mac is busy; under
+    # ~24 a second animations visibly stutter (PR #4: 10).
+    fps = motion_fps(video, rep)
+    if fps is not None:
+        notes.append(f"smoothness: {fps:.0f} distinct frames a second while things move")
+        if fps < SMOOTH_MIN:
+            flags.append(f"choppy: animations show only {fps:.0f} frames a second (the Mac was busy while recording)")
 
     # captions
     for ch in rep["chapters"]:
