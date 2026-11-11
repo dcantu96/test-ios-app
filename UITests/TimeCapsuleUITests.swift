@@ -1,6 +1,10 @@
 import XCTest
 
 /// End-to-end: the real app, in the Simulator, talking to the real API and Postgres.
+///
+/// Nothing here races the clock: the "too early" check uses a capsule sealed for a year, so it can't open
+/// however slow the CI machine is, and the 10-second capsule is sealed first so its countdown runs while the
+/// other checks happen.
 final class TimeCapsuleUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -10,7 +14,9 @@ final class TimeCapsuleUITests: XCTestCase {
 
     @MainActor
     func testSealRefuseEarlyOpenWaitThenReveal() throws {
-        let secret = "Dear future me, remember tonight (\(UUID().uuidString.prefix(6)))"
+        let tag = String(UUID().uuidString.prefix(6))
+        let secret = "Dear future me, remember tonight (\(tag))"
+        let letter = "Open this next year (\(tag))"
         app = launchApp()
 
         // 1. The compose card is up and the vault (API) is reachable.
@@ -19,44 +25,50 @@ final class TimeCapsuleUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["errorBanner"].exists, "app couldn't reach the API")
         snap("1 Launched")
 
-        // 2. Write a message and seal it for 10 seconds.
-        field.tap()
-        field.typeText(secret)
-        app.buttons["10s"].tap()
-        snap("2 Message written")
-        app.buttons["sealButton"].tap()
-
-        // 3. The newest capsule is sealed and its message is nowhere on screen.
-        let row = app.buttons.matching(identifier: "capsuleRow").firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "sealed capsule never showed up")
-        XCTAssertEqual(row.value as? String, "sealed")
+        // 2. Seal a message for 10 seconds; its countdown runs during the next steps.
+        seal(secret, for: "10s", field: field)
+        let quick = rows.firstMatch
+        XCTAssertTrue(quick.waitForExistence(timeout: 10), "sealed capsule never showed up")
         XCTAssertFalse(rowShowing(secret).exists, "a sealed capsule must not show its message")
-        snap("3 Sealed with countdown")
+        snap("2 Sealed for 10 seconds")
 
-        // 4. Opening early: the server refuses (HTTP 423) and the app says so.
-        row.tap()
-        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 5), "server didn't refuse an early open")
-        snap("4 Server refused early open")
+        // 3. Seal a letter for a year, and try to open it: the server refuses (HTTP 423) and the app says so.
+        seal(letter, for: "1y", field: field)
+        let yearLong = rows.firstMatch
+        XCTAssertTrue(waitFor(rows, count: 2), "second capsule never showed up")
+        XCTAssertEqual(yearLong.value as? String, "sealed")
+        yearLong.tap()
+        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10), "server didn't refuse an early open")
+        XCTAssertFalse(rowShowing(letter).exists, "a refused capsule must not show its message")
+        snap("3 Server refused to open the year-long capsule")
 
-        // 5. Wait for the seal time to pass.
-        let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: row)
+        // 4. The 10-second capsule (now second in the list) unlocks; open it and read it.
+        let ten = rows.element(boundBy: 1)
+        let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: ten)
         wait(for: [ready], timeout: 30)
-        snap("5 Ready to open")
-
-        // 6. Open it: the seal cracks and the server reveals the message.
-        row.tap()
+        snap("4 Ready to open")
+        ten.tap()
         let revealed = app.staticTexts["revealedMessage"]
         XCTAssertTrue(revealed.waitForExistence(timeout: 10), "message was never revealed")
         XCTAssertEqual(revealed.label, secret)
         sleep(1) // let the crack-open animation settle for the screenshot
-        snap("6 Seal cracked, message revealed")
+        snap("5 Seal cracked, message revealed")
 
-        // 7. Kill and relaunch: the opened capsule comes back from Postgres.
+        // 5. Kill and relaunch: both capsules come back from Postgres, the opened one with its message,
+        //    the year-long one still sealed and still without its message.
         app.terminate()
         app = launchApp()
         XCTAssertTrue(rowShowing(secret).waitForExistence(timeout: 20), "opened capsule didn't survive a relaunch")
-        snap("7 After relaunch, loaded from Postgres")
+        XCTAssertTrue(waitFor(rows, count: 2), "a capsule went missing after the relaunch")
+        XCTAssertEqual(rows.firstMatch.value as? String, "sealed")
+        XCTAssertFalse(rowShowing(letter).exists, "the year-long capsule leaked its message after a relaunch")
+        snap("6 After relaunch, loaded from Postgres")
     }
+
+    // MARK: - Helpers
+
+    @MainActor
+    private var rows: XCUIElementQuery { app.buttons.matching(identifier: "capsuleRow") }
 
     @MainActor
     private func launchApp() -> XCUIApplication {
@@ -64,6 +76,20 @@ final class TimeCapsuleUITests: XCTestCase {
         app.launchEnvironment["API_URL"] = ProcessInfo.processInfo.environment["API_URL"] ?? "http://localhost:8787"
         app.launch()
         return app
+    }
+
+    @MainActor
+    private func seal(_ text: String, for duration: String, field: XCUIElement) {
+        field.tap()
+        field.typeText(text)
+        app.buttons[duration].tap()
+        app.buttons["sealButton"].tap()
+    }
+
+    @MainActor
+    private func waitFor(_ query: XCUIElementQuery, count: Int, timeout: TimeInterval = 10) -> Bool {
+        let e = expectation(for: NSPredicate(format: "count >= %d", count), evaluatedWith: query)
+        return XCTWaiter().wait(for: [e], timeout: timeout) == .completed
     }
 
     @MainActor

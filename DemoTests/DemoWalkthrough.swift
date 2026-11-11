@@ -22,7 +22,7 @@ final class DemoWalkthrough: XCTestCase {
                 sub: "Write something today. The server keeps it sealed until it is time.")
         pause(3.4)
 
-        // Write a note and seal it.
+        // Write a note and seal it for ten seconds (its countdown runs during the next chapter).
         chapter(title: "Write it. Pick when it opens.", sub: "Ten seconds, a minute, an hour, a day or a year.")
         pause(1.4)
         tap(field)
@@ -34,22 +34,33 @@ final class DemoWalkthrough: XCTestCase {
         tap(app.buttons["10s"])
         pause(1.0)
         tap(app.buttons["sealButton"])
-        let row = app.buttons.matching(identifier: "capsuleRow").firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        let rows = app.buttons.matching(identifier: "capsuleRow")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
         pause(1.6)
 
-        // Try to open it early: the server says no.
+        // A letter sealed for a year: try to open it, and the server says no. (A year, not ten seconds, so the
+        // refusal can't race a slow CI machine.)
         chapter(title: "Sealed means sealed.",
                 sub: "Tap it early and the server refuses. Not even the app can read the message yet.",
                 chip: "GET /capsules/:id  \u{2192}  423 Locked")
-        pause(1.6)
-        tap(row)
-        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 5))
+        pause(1.2)
+        tap(field)
+        type("Open this next year.", into: field)
+        pause(0.5)
+        tap(app.buttons["1y"])
+        pause(0.6)
+        tap(app.buttons["sealButton"])
+        let letter = rows.firstMatch
+        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 10))
+        pause(1.2)
+        tap(letter)
+        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10))
         pause(2.8)
 
-        // Waiting out the seal is dull: the video fast-forwards it.
+        // The ten-second note unlocks (fast-forwarded if it still has time left) and the seal cracks open.
+        let note = rows.element(boundBy: 1)
         let waitStart = Date()
-        let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: row)
+        let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: note)
         wait(for: [ready], timeout: 30)
         fastForward(from: waitStart, factor: 5)
         pause(0.6)
@@ -58,7 +69,7 @@ final class DemoWalkthrough: XCTestCase {
                 sub: "The wax cracks, and only now does the server hand over the message.",
                 chip: "GET /capsules/:id  \u{2192}  200 OK")
         pause(1.4)
-        tap(row)
+        tap(note)
         XCTAssertTrue(app.staticTexts["revealedMessage"].waitForExistence(timeout: 10))
         pause(4.0)
 
