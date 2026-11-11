@@ -207,9 +207,10 @@ final class DemoWalkthrough: XCTestCase {
         }
     }
 
-    /// Drops a stretch from the video (the home screen and launch screen during a relaunch).
+    /// Drops a stretch from the video (the home screen and launch screen during a relaunch). It starts 0.4 s early,
+    /// on the still screen before, so not a frame of the home screen shows in the dip.
     private func cut(from start: Date) {
-        events.append(["t": start.timeIntervalSince1970, "kind": "cut", "until": now() - 0.2])
+        events.append(["t": start.timeIntervalSince1970 - 0.4, "kind": "cut", "until": now() - 0.2])
     }
 
     private func attachMarkers() {

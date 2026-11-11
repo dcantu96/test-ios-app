@@ -428,8 +428,8 @@ def main():
     ap.add_argument("--footer", default="")
     ap.add_argument("--quality", choices=["high", "draft"], default="high")
     ap.add_argument("--keep", help="keep intermediate files in this folder")
-    ap.add_argument("--save-source", help="also write the synced, trimmed-to-length screen recording (source.mp4) and its "
-                                          "markers.json to this folder, to iterate on the board in Linux later")
+    ap.add_argument("--save-source", help="also write the normalized screen recording this run analysed (source.mp4) and its "
+                                          "markers.json to this folder: compose.py on them reproduces this run in Linux")
     ap.add_argument("--no-trim", action="store_true", help="don't trim dead air")
     args = ap.parse_args()
 
@@ -444,8 +444,17 @@ def main():
     nominal_end = (ends[-1]["t"] if ends else evs[-1]["t"] + 3) - t0
 
     # 1. Look at the recording: what changes when.
+    # One pass turns the raw recording into a clean, constant-rate copy of the phone's screen from s0 on, and every
+    # later step reads that copy. simctl's timestamps are messy: two passes that each seek into the raw file at a
+    # different point drifted apart by 5-27 s (the analysis and the cut disagreed). One seek, one timeline.
     s0 = max(0.0, nominal_start - 90)  # the offset search covers -90..+40 s
-    frames = load_frames(args.recording, s0, nominal_end - s0 + 20)
+    work = args.keep or tempfile.mkdtemp(prefix="demo-")
+    os.makedirs(work, exist_ok=True)
+    norm = os.path.join(work, "norm.mp4")
+    run([FFMPEG, "-v", "error", "-y", "-ss", f"{s0:.3f}", "-t", f"{nominal_end - s0 + 45:.3f}", "-i", args.recording,
+         "-vf", f"fps={FPS},scale={SCREEN_W}:{SCREEN_H}:flags=lanczos,setsar=1",
+         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-pix_fmt", "yuv420p", norm], "normalize")
+    frames = load_frames(norm, 0.0, nominal_end - s0 + 45)
     changed = change_maps(frames)
     import numpy as np
     moving = changed.reshape(len(changed), -1).mean(axis=1)
@@ -562,8 +571,6 @@ def main():
                 r = s0 + hit[0] / AN_FPS - 0.08
         taps.append((r, e))
 
-    work = args.keep or tempfile.mkdtemp(prefix="demo-")
-    os.makedirs(work, exist_ok=True)
     bg, mask, ripple = (os.path.join(work, n) for n in ("bg.png", "mask.png", "ripple.png"))
     draw_background(bg)
     draw_screen_mask(mask)
@@ -598,9 +605,9 @@ def main():
             fx += f",fade=t=out:st={out_len - 0.18:.3f}:d=0.18"
         if pos > 0 and segs[pos - 1][3] and out_len > 0.4:
             fx += ",fade=t=in:st=0:d=0.18"
-        parts.append(f"[p{i}]trim=start={a - start:.3f}:end={b - start:.3f},setpts=(PTS-STARTPTS)/{f}{fx}[s{i}]")
+        parts.append(f"[p{i}]trim=start={a - s0:.3f}:end={b - s0:.3f},setpts=(PTS-STARTPTS)/{f}{fx}[s{i}]")
     graph = ";".join(parts) + ";" + "".join(f"[s{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=0,fps={FPS}[v]"
-    run([FFMPEG, "-v", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start + 0.5:.3f}", "-i", args.recording,
+    run([FFMPEG, "-v", "error", "-y", "-i", norm,
          "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
 
     # 5. The board: background, masked screen, captions (fade + drift in), tap ripples.
@@ -647,12 +654,12 @@ def main():
 
     # 6. Optionally keep the synced source for iterating on the board later without a Mac.
     if args.save_source:
+        # Exactly what this run analysed, with markers shifted to it: compose.py on these redoes this run's sync.
         os.makedirs(args.save_source, exist_ok=True)
-        lead = min(start, 1.0)
-        run([FFMPEG, "-v", "error", "-y", "-ss", f"{start - lead:.3f}", "-t", f"{end - start + lead + 0.5:.3f}", "-i", args.recording,
-             "-vf", f"fps={FPS},scale={SCREEN_W * 2}:{SCREEN_H * 2}:flags=lanczos,setsar=1",
-             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p", os.path.join(args.save_source, "source.mp4")], "source")
-        m2 = dict(M, recordingStart=t0 - offset + (start - lead), synced=True)
+        run([FFMPEG, "-v", "error", "-y", "-i", norm, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+             os.path.join(args.save_source, "source.mp4")], "source")
+        m2 = {k: v for k, v in M.items() if k != "synced"}
+        m2["recordingStart"] = t0 + s0
         json.dump(m2, open(os.path.join(args.save_source, "markers.json"), "w"), indent=1)
 
     # 7. What the video contains, in output time, for demo/review.py to check against the pixels.
