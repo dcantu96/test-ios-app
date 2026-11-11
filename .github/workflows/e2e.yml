@@ -47,7 +47,7 @@ jobs:
           scheme: CloudSim
 
       - name: Boot the Simulator
-        run: bash scripts/sim.sh boot "$SIM_UDID"
+        run: SIM_PREWARM_AX=1 bash scripts/sim.sh boot "$SIM_UDID"
 
       - name: E2E suite
         run: bash scripts/run-e2e.sh
@@ -80,7 +80,7 @@ jobs:
           scheme: CloudSimDemo
 
       - name: Boot the Simulator
-        run: bash scripts/sim.sh boot "$SIM_UDID"
+        run: SIM_STATUS_BAR=1 bash scripts/sim.sh boot "$SIM_UDID"
 
       - name: Record the walkthrough
         run: OUT="$PWD/out-demo" bash scripts/run-demo.sh

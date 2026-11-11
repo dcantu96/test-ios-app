@@ -62,11 +62,25 @@ fi
 
 if [ "$cmd" = "boot" ]; then
   UDID="$2"
+  if [ "${SIM_PREWARM_AX:-0}" = "1" ]; then
+    # XCUITest turns accessibility on in every process when the test runner starts, which takes ~40 s on a
+    # freshly booted, busy Simulator. Turned on in the device's preferences before boot, it loads with boot.
+    PREFS=~/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/Preferences
+    mkdir -p "$PREFS"
+    for k in AccessibilityEnabled ApplicationAccessibilityEnabled AutomationEnabled; do
+      defaults write "$PREFS/com.apple.Accessibility" "$k" -bool YES
+    done
+    echo "accessibility pre-enabled"
+  fi
   t0=$(date +%s)
   xcrun simctl bootstatus "$UDID" -b > /dev/null
-  xcrun simctl ui "$UDID" appearance light || true
-  xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
-  echo "Simulator $UDID booted in $(( $(date +%s) - t0 ))s"
+  t1=$(date +%s)
+  echo "Simulator $UDID booted in $(( t1 - t0 ))s"
+  if [ "${SIM_STATUS_BAR:-0}" = "1" ]; then
+    # A clean 9:41 status bar for recordings (the e2e screenshots don't need it).
+    xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
+    echo "status bar set in $(( $(date +%s) - t1 ))s"
+  fi
   exit 0
 fi
 
