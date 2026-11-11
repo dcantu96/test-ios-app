@@ -296,12 +296,12 @@ TYPE_KEEP = 0.12                     # ... between keystrokes
 TYPE_RATE = 11.0                     # characters a second: typing is re-timed to this pace
 
 
-def load_frames(recording, s0, length):
+def load_frames(recording, s0, length, fps=None):
     """The recording from s0 for `length` seconds as a (frames, H, W) uint8 array at AN_FPS. Seeking on the input
     keeps simctl's messy timestamps out of the fps filter (see build_screen)."""
     import numpy as np
     raw = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{s0:.3f}", "-t", f"{length:.3f}", "-i", recording,
-                          "-vf", f"fps={AN_FPS},scale={AN_W}:{AN_H}:flags=area,format=gray", "-f", "rawvideo", "-"],
+                          "-vf", f"fps={fps or AN_FPS},scale={AN_W}:{AN_H}:flags=area,format=gray", "-f", "rawvideo", "-"],
                          check=True, capture_output=True).stdout
     n = len(raw) // (AN_W * AN_H)
     return np.frombuffer(raw[: n * AN_W * AN_H], dtype=np.uint8).reshape(n, AN_H, AN_W)
@@ -493,12 +493,14 @@ def main():
     for e in evs:
         if e["kind"] != "type" or "x" not in e or not e.get("chars"):
             continue
-        a, b = R(e["t"]), R(e["until"]) + 0.15
-        ser = region_series(changed, e, grow=0.02)
-        keys = [k for k in range(max(0, K(a)), min(len(ser), K(b) + 1)) if ser[k] > 0.004]
-        if len(keys) < 2:
+        a, b = R(e["t"]) - 0.2, R(e["until"]) + 0.3
+        # Every frame here (not the 10 a second used elsewhere): the text often lands in bursts, and at 10 fps a
+        # 20-letter message showed only 4 distinct moments, which re-timed into visible stalls.
+        fine = load_frames(norm, max(0.0, a - s0), b - a, fps=FPS)
+        ser = region_series(change_maps(fine), e, grow=0.02)
+        rs = [max(s0, a) + k / FPS for k in range(len(ser)) if ser[k] > 0.004]
+        if len(rs) < 2:
             continue
-        rs = [s0 + k / AN_FPS for k in keys]
         step = (e["chars"] / TYPE_RATE) / (len(rs) - 1)
         for r0, r1 in zip(rs, rs[1:]):
             explicit.append((r0, r1, max(0.12, min(8.0, (r1 - r0) / step)), False))  # XCUITest can type 30+ a second
@@ -594,21 +596,22 @@ def main():
     #    raw timestamps (trim, select) see the wrong frames. Seeking on the input is reliable, and after fps= the
     #    timestamps are clean: so one pass seeks to `start`, fixes the rate, scales to the phone's screen, then cuts
     #    and fast-forwards. A cut dips the screen to black for a moment on each side, like an app switch.
-    keep = [s for s in segs if s[2]]
+    # Every frame gets its output time from one expression of its own time (select drops what's cut, setpts places
+    # the rest, fps repeats frames to fill slowed-down stretches). Frame-exact: cutting the recording into pieces
+    # and joining them rounded short pieces to nothing, which made re-timed typing jump.
+    keep = [x for x in segs if x[2]]
+    terms = "+".join(f"gte(T\\,{a - s0:.4f})*lt(T\\,{b - s0:.4f})*({warp(segs, a):.4f}+(T-{a - s0:.4f})/{f:.5f})" for a, b, f, _ in keep)
+    gone = "+".join(f"gte(t\\,{a - s0:.4f})*lt(t\\,{b - s0:.4f})" for a, b, f, _ in segs if not f) or "0"
+    lo, hi = segs[0][0] - s0, segs[-1][1] - s0
+    dips = [warp(segs, a) for a, b, f, dip in segs if dip and not f]
+    dip = "+".join(f"max(0\\,1-abs(t-{d:.3f})/0.18)" for d in dips) or "0"
+    graph = (f"[0:v]select='gte(t\\,{lo:.4f})*lt(t\\,{hi:.4f})*not({gone})',setpts='({terms})/TB',fps={FPS},"
+             f"trim=duration={dur:.3f},eq=brightness='-min(1\\,{dip})':eval=frame[v]")
+    gpath = os.path.join(work, "screen.graph")
+    open(gpath, "w").write(graph)
     screen = os.path.join(work, "screen.mp4")
-    parts = [f"[0:v]fps={FPS},scale={SCREEN_W}:{SCREEN_H}:flags=lanczos,setsar=1,split={len(keep)}" + "".join(f"[p{i}]" for i in range(len(keep)))]
-    for i, (a, b, f, _) in enumerate(keep):
-        fx = ""
-        pos = segs.index(keep[i])
-        out_len = (b - a) / f
-        if pos + 1 < len(segs) and segs[pos + 1][3] and out_len > 0.4:
-            fx += f",fade=t=out:st={out_len - 0.18:.3f}:d=0.18"
-        if pos > 0 and segs[pos - 1][3] and out_len > 0.4:
-            fx += ",fade=t=in:st=0:d=0.18"
-        parts.append(f"[p{i}]trim=start={a - s0:.3f}:end={b - s0:.3f},setpts=(PTS-STARTPTS)/{f}{fx}[s{i}]")
-    graph = ";".join(parts) + ";" + "".join(f"[s{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=0,fps={FPS}[v]"
-    run([FFMPEG, "-v", "error", "-y", "-i", norm,
-         "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
+    run([FFMPEG, "-v", "error", "-y", "-i", norm, "-filter_complex_script", gpath, "-map", "[v]", "-t", f"{dur:.3f}",
+         "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
 
     # 5. The board: background, masked screen, captions (fade + drift in), tap ripples.
     #    Every still is decoded once and repeated with the loop filter: "-loop 1" would decode the PNG again for

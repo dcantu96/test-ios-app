@@ -85,7 +85,7 @@ final class DemoWalkthrough: XCTestCase {
         XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 2))
         waitUntilDrawn()
         cut(from: relaunchStart)
-        pause(3.0)
+        pause(3.6)
 
         chapter(style: "end", title: "Time Capsule", sub: "SwiftUI app, Node API, Postgres. Recorded on a cloud Mac.")
         pause(4.0)
