@@ -38,7 +38,7 @@ DEAD_AIR = 2.0      # s of unchanging screen outside a pause
 LONG_HOLD = 5.0     # s of unchanging screen even inside a pause
 TYPE_MIN, TYPE_MAX = 5.0, 30.0   # characters a second
 TYPE_STALL = 0.6    # s without a keystroke while typing
-MAX_LENGTH = 90.0   # s
+MAX_LENGTH = 60.0   # s: a demo shows one change; longer means it's touring the app
 STATIC = 0.002
 PIX = 14
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Record the demo walkthrough (DemoTests/) against the live API, from the build that scripts/build.sh made.
-# It runs on its own machine (CI's "demo" job), so its database holds only what the walkthrough creates.
+# Record this PR's demo scene (DemoTests/) against the live API, from the build that scripts/build.sh made.
+# It runs on its own machine (CI's "demo" job), so its database holds only what the scene seeds and creates.
 # Produces ./out-demo/raw.mp4 (the Simulator's screen) and ./out-demo/markers.json (captions, taps,
 # fast-forwards, and the moment the recording started), which demo/compose.py turns into the MP4.
 # This is a preview, not a test gate: the e2e suite (run-e2e.sh) is what guards main.

@@ -10,9 +10,9 @@ CI (`.github/workflows/e2e.yml`, workflow name "CI") runs two Macs in parallel. 
 
 | | **e2e** job | **demo** job |
 |---|---|---|
-| Purpose | The merge gate: proves the feature works end to end | A one-off preview video of the change, for people reviewing the PR |
+| Purpose | The merge gate: proves the whole app works end to end | A one-off preview video of **only this PR's change**, for people reviewing it |
 | Runs | Every PR into `main`, and every push to `main` | Every PR push (re-recorded each time), or by hand |
-| What runs | API tests against Postgres, then `UITests/` in the Simulator against the live API | `DemoTests/` at human pace in the Simulator, recorded, then composed into an MP4 on the same Mac |
+| What runs | API tests against Postgres, then `UITests/` in the Simulator against the live API | This PR's scene in `DemoTests/` at human pace in the Simulator, recorded, then composed into an MP4 on the same Mac |
 | Output | Screenshots and logs on `e2e-output/<branch>` | `demo.mp4` (1080p60) on `demo-preview/<branch>`, linked in a PR comment |
 | Kept | Until the PR closes (`cleanup.yml`) | Until the PR closes (`cleanup.yml`) |
 
@@ -30,7 +30,7 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
    - Every wait is `waitForExistence` or an expectation with a timeout, never a fixed `sleep` (the one `sleep(1)` is only for a screenshot of a finished animation).
    - Something on screen only briefly (the 4 s locked banner): wait for it with its text in one predicate query (`lockedBanner("Knock #2")`), and `snap` right after, before any other query. On a busy Simulator each query can take seconds; an exists-then-read-label check, or a screenshot after one more query, missed the banner.
 4. **Write the Swift.** Keep identifiers (`accessibilityIdentifier`) on everything a test touches. You can't compile Swift here, so read your code twice: check Swift 6 concurrency (`@MainActor`), optionals and API names. A compile error costs a whole CI round (about 5 minutes).
-5. **Update the demo** if the change is visible: go through "Before writing demo steps" (under "Demo videos") first, then edit `DemoTests/DemoWalkthrough.swift`. To change captions or the board, iterate in Linux on the previous run's `source/` (see "Demo videos").
+5. **Rewrite the demo scene for this change** if it's visible: go through "Before writing demo steps" (under "Demo videos") first, then replace `DemoTests/DemoWalkthrough.swift` with a scene that shows only this PR's change. Don't add to the previous PR's scene. To change captions or the board, iterate in Linux on the previous run's `source/` (see "Demo videos").
 6. **Push once and open the PR** (`gh pr create --base main`, or `gh api repos/dcantu96/test-ios-app/pulls -f ...` if GraphQL is blocked). Both Mac jobs start at once.
 7. **Wait and measure.** Poll, then read the timings:
    ```sh
@@ -79,10 +79,20 @@ Before this work it was e2e ~5 min and demo ~10 min (record, then a Linux job co
 
 ## Demo videos
 
-A demo is a short film of the change for people reviewing the PR. CI records `DemoTests/DemoWalkthrough.swift` driving the app, `demo/compose.py` turns the recording into the 1080p60 MP4, and `demo/review.py` checks it. The first fast-CI video (PR #2, 102 s) had every flaw below. They were found by watching it frame by frame, and each one is now a rule, an automatic fix or an automatic check.
+A demo is a short film of **this PR's change and nothing else**, for the person reviewing it. It is not a tour of the app: the e2e suite proves everything else works. CI records the scene in `DemoTests/DemoWalkthrough.swift` driving the app, `demo/compose.py` turns the recording into the 1080p60 MP4, and `demo/review.py` checks it.
+
+- `DemoTests/DemoKit.swift` is the toolkit and stays: `seed(...)`, `seedKnock(...)`, `waitUntilReady(...)` set the stage through the API; `chapter`, `tap`, `type`, `pause`, `fastForward`, `cut`, `finish` are the on-camera actions.
+- `DemoTests/DemoWalkthrough.swift` is this PR's scene, **rewritten for every PR**. PR #4's (Write back) is the model: it seeds a note that's ready to open, then shows opening it, writing back, and the reply counting down. About 30 s.
+
+The first fast-CI video (PR #2, 102 s) had every flaw in the table below. They were found by watching it frame by frame, and each one is now a rule, an automatic fix or an automatic check. The early videos also replayed every feature of the app in every PR (PR #4's ran 68 s, mostly old features); the user wants only the change.
 
 ### Before writing demo steps (go through this list first)
 
+0. **Show only this PR's change.** List what the PR changed that a user can see; those are the only beats. Then:
+   - **Seed everything the change builds on**, off camera, before the first `chapter`: `seed("…", opensIn: 10)` and `waitUntilReady(id)` for a capsule ready to open, `seedKnock(id)` for knocks. Add a seed helper to `DemoKit.swift` (through the API) if the change needs a state there isn't one for. Never walk through older features on camera to reach the starting point.
+   - **Title card:** `chapter(style: "title", kicker: "New in this PR", title: <the change's name>, sub: <what it does, one sentence>)`.
+   - **One to three step chapters**, each showing one visible part of the change, then the `end` card.
+   - If the PR changes nothing visible, the demo job still runs; say so in the PR instead of making a video about something else.
 1. **One idea per chapter, shown on camera.** Write the captions first: each `chapter(...)` names one thing the viewer will *see* happen right after it. If something happens off camera (a countdown that ran out while you were typing something else), reorder the story so it happens on screen.
 2. **Captions need reading time.** About 1 s plus 25 characters a second (title + sub + chip). Size the `pause()` after a caption, or the actions under it, to cover that. `compose.py` warns about short chapters and `review.py` flags them. Keep subs to one short sentence.
 3. **Text must fit its field.** A message longer than the field scrolls sideways and loses its first letters. Keep typed text under about 30 characters.
@@ -92,7 +102,7 @@ A demo is a short film of the change for people reviewing the PR. CI records `De
 7. **Real waits get `fastForward(from:factor:)`**: the 10 s countdown plays at 8×, about a second. At 4× it still read as dead air.
 8. **Don't leave the app on camera.** No `terminate()`/`launch()` in the walkthrough: on the 3-CPU public-repo runner the recording stopped updating once the app quit and showed the home screen to the end (PR #4), even though the test saw the app back. Show persistence with pull-to-refresh instead; the e2e test proves the relaunch. If something outside the app is ever unavoidable, wrap it in `cut(from:)` and check the sheets after it.
 9. **Wait for the app to be visible, not just present: `waitUntilDrawn()`** after every launch, before the first caption and before ending a cut. On a busy Simulator the screen lags the app by seconds: XCUITest found the text field while the screen still showed the home screen, then a white launch screen, for 6 s of the title card.
-10. **Aim for 45–75 s.** `review.py` flags anything over 90 s.
+10. **Aim for 20–40 s.** One change rarely needs more. `review.py` flags anything over 60 s, a sign the scene is touring the app.
 
 ### Reviewing the finished video (every time, before calling it done)
 
@@ -110,7 +120,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 - **blank**: no flat one-color screen (a launch screen) outside the dip at a cut
 - **not the app**: the phone shows the app or its sheets, never the home screen (app: saturation 0.40–0.65, sheets: 40–85% white; home screen: 0.24 and 4%)
 - **captions**: up long enough to read
-- **length**: under 90 s
+- **length**: under 60 s
 
 ### Flaws found in the 102 s video, and what fixed them
 
@@ -133,6 +143,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 | A headline ending on one word ("…when it / opens.") | Greedy line wrapping | Balanced wrapping: same line count, even lengths |
 | Star trails across the captions, reading as strikethroughs | Random trails anywhere in the sky | Trails kept out of the caption column |
 | Message clipped at the start of the field | Message longer than the field | Shorter messages (checklist 3) |
+| Every demo replayed the whole app (PR #4: 68 s, five chapters of old features before the new one) | Each PR appended a chapter to one ever-growing walkthrough | The scene is rewritten per PR and shows only the change; earlier state is seeded through the API off camera (checklist 0). PR #4's demo went from 68 s to about 30 s |
 
 ### Tools
 
@@ -186,5 +197,5 @@ The API is TypeScript run directly by Node (`--experimental-strip-types`). Use o
 
 - Commit as `David Cantu <dcantu96@users.noreply.github.com>` with a `Co-Authored-By: Claude` trailer.
 - Branch, PR into `main`, green e2e, then the user merges. No direct pushes to `main`.
-- Every user-facing change gets an e2e step with a `snap(...)` and, if it's visible, a beat in the demo walkthrough, written against the demo checklist and reviewed with `review.py` and the contact sheets.
+- Every user-facing change gets an e2e step with a `snap(...)` (the e2e suite grows and covers everything), and, if it's visible, a new demo scene showing only that change (the demo doesn't grow), written against the demo checklist and reviewed with `review.py` and the contact sheets.
 - Keep `README.md` describing the product and `CLAUDE.md` describing how to work on it.

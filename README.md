@@ -14,7 +14,7 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 |---|---|
 | `App/` | SwiftUI app (iOS 26+ SDK, Liquid Glass). Reads the API from `API_URL`, defaulting to `http://localhost:8787` |
 | `UITests/` | XCUITest end-to-end suite: the merge gate |
-| `DemoTests/` | A human-paced walkthrough that CI records as each PR's demo video (not a test gate) |
+| `DemoTests/` | Each PR's demo scene (showing only that PR's change), plus the kit it's written with; CI records it as the PR's video (not a test gate) |
 | `demo/compose.py` | Turns a Simulator recording plus the walkthrough's markers into a 1080p60 MP4 |
 | `api/` | Node 24 + TypeScript API (`node:http` + `pg`), SQL migrations, `node --test` integration tests |
 | `scripts/start-backend.sh` | Starts Postgres 17, runs the API tests, starts the API |
@@ -53,7 +53,7 @@ All knocking happens on the year-long letter, so nothing can unlock mid-test how
 One workflow (`.github/workflows/e2e.yml`, "CI") runs on every PR into `main` and every push to `main`, on two of GitHub's `xcode-27` macOS runners in parallel:
 
 - **e2e**: API tests against Postgres, then the e2e suite in the newest iOS Simulator against the live API. It's the check that has to pass before merging. Screenshots and logs go to `e2e-output/<branch>`.
-- **demo** (PRs): records the walkthrough, composes it into `demo.mp4` (1080p60) on the same Mac, checks it (`demo/review.py`: sync, dead air, typing pace, flashes, caption time), and comments on the PR with the link and the review. The video, review, contact sheets and synced source live on `demo-preview/<branch>`.
+- **demo** (PRs): records a short scene of just that PR's change, composes it into `demo.mp4` (1080p60) on the same Mac, checks it (`demo/review.py`: sync, dead air, typing pace, flashes, caption time), and comments on the PR with the link and the review. The video, review, contact sheets and synced source live on `demo-preview/<branch>`.
 
 `cleanup.yml` deletes a PR's `demo-preview/` and `e2e-output/` branches when it closes. A push takes about 5 minutes to a green e2e and a posted demo; CLAUDE.md has the measurements and why it's laid out this way.
 
