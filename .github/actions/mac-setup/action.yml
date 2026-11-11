@@ -1,0 +1,56 @@
+name: Mac setup
+description: >
+  Everything a Mac job needs before it can run UI tests, ordered so the slow part overlaps the rest: restore the
+  cached Simulator devices, start booting the Simulator in the background, then Node, XcodeGen, Postgres + API
+  tests + API, and the build. The caller waits for the boot (scripts/sim.sh wait) right before testing.
+inputs:
+  scheme:
+    description: Scheme to build for testing (CloudSim for e2e, CloudSimDemo for the demo)
+    required: true
+outputs:
+  sim-cache-hit:
+    description: Whether booted Simulator devices came from the cache
+    value: ${{ steps.simcache.outputs.cache-hit }}
+  sim-cache-key:
+    description: Key to save the Simulator devices under
+    value: ${{ steps.image.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - name: Runner image
+      id: image
+      shell: bash
+      run: echo "key=sim-devices-${ImageOS:-macos}-${ImageVersion:-unknown}-v1" >> "$GITHUB_OUTPUT"
+
+    # A Simulator's first boot spends most of its ~100 s on one-time data migration. The migrated device is
+    # cached per runner image, so later runs boot an already-migrated device.
+    - name: Restore booted Simulator devices
+      id: simcache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/Library/Developer/CoreSimulator/Devices
+        key: ${{ steps.image.outputs.key }}
+
+    - name: Start booting the Simulator
+      shell: bash
+      env:
+        SIM_CACHE_HIT: ${{ steps.simcache.outputs.cache-hit }}
+      run: bash scripts/sim.sh prepare
+
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: api/package-lock.json
+
+    - name: Install XcodeGen
+      shell: bash
+      run: brew install xcodegen
+
+    - name: Postgres + API tests + API
+      shell: bash
+      run: bash scripts/start-backend.sh
+
+    - name: Build app and UI tests
+      shell: bash
+      run: SCHEMES="${{ inputs.scheme }}" bash scripts/build.sh

@@ -2,9 +2,10 @@
 # Simulator helpers for CI.
 #
 #   scripts/sim.sh prepare   Select the newest Xcode, pick the newest *general* iOS runtime and an iPhone Pro,
-#                            and start booting it (plus a second one for the demo when DEMO=1) WITHOUT waiting.
-#                            Booting takes ~100 s on a fresh runner, so it runs while Postgres, the API tests and
-#                            the build happen. Writes UDID_E2E / UDID_DEMO to $GITHUB_ENV and $OUT/sim.env.
+#                            and start booting it in the background. A first boot takes ~100 s on a fresh runner
+#                            (most of it one-time data migration), so it runs while Postgres, the API tests and
+#                            the build happen. Writes SIM_UDID to $GITHUB_ENV and $OUT/sim.env.
+#                            One Simulator per machine: two booting at once starve a 5-CPU runner.
 #   scripts/sim.sh wait UDID Wait until that simulator has finished booting, then give it a clean status bar.
 set -euo pipefail
 
@@ -18,6 +19,11 @@ if [ "$cmd" = "prepare" ]; then
   xcodebuild -version | tee "$OUT/xcode-version.txt"
   echo "CPUs: $(sysctl -n hw.ncpu), memory: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB" | tee "$OUT/machine.txt"
 
+  if [ "${SIM_CACHE_HIT:-}" = "true" ]; then
+    # Simulator devices were restored from the cache: restart CoreSimulator so it reads them from disk.
+    sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
+    echo "Using cached Simulator devices ($(du -sh ~/Library/Developer/CoreSimulator/Devices | cut -f1))"
+  fi
   xcrun simctl list runtimes -j > "$OUT/runtimes.json"
   RUNTIME_ID="$(python3 - "$OUT/runtimes.json" "$OUT/runtime.txt" <<'PY'
 import json, re, sys
@@ -33,7 +39,7 @@ print(rts[-1]["identifier"])
 PY
 )"
   # The iPhone Pro device type this runtime supports, and an existing device of it (if any).
-  read -r DEVTYPE UDID_E2E <<<"$(python3 - "$OUT/runtimes.json" "$RUNTIME_ID" <<'PY'
+  read -r DEVTYPE SIM_UDID <<<"$(python3 - "$OUT/runtimes.json" "$RUNTIME_ID" <<'PY'
 import json, subprocess, sys
 r = [x for x in json.load(open(sys.argv[1]))["runtimes"] if x["identifier"] == sys.argv[2]][0]
 phones = [d for d in r.get("supportedDeviceTypes", []) if d.get("productFamily") == "iPhone"]
@@ -44,18 +50,13 @@ match = [d for d in devs if d.get("isAvailable") and d.get("deviceTypeIdentifier
 print(devtype["identifier"], match[0]["udid"] if match else "-")
 PY
 )"
-  [ "$UDID_E2E" = "-" ] && UDID_E2E="$(xcrun simctl create "CloudSim E2E" "$DEVTYPE" "$RUNTIME_ID")"
-  xcrun simctl boot "$UDID_E2E" 2>/dev/null || true
-  xcrun simctl list devices | grep "$UDID_E2E" | tee "$OUT/device.txt"
-  echo "UDID_E2E=$UDID_E2E" | tee "$OUT/sim.env"
-
-  if [ "${DEMO:-0}" = "1" ]; then
-    UDID_DEMO="$(xcrun simctl create "CloudSim Demo" "$DEVTYPE" "$RUNTIME_ID")"
-    xcrun simctl boot "$UDID_DEMO" 2>/dev/null || true
-    echo "UDID_DEMO=$UDID_DEMO" | tee -a "$OUT/sim.env"
-  fi
-  cat "$OUT/sim.env" >> "${GITHUB_ENV:-/dev/null}"
+  [ "$SIM_UDID" = "-" ] && SIM_UDID="$(xcrun simctl create "CloudSim iPhone" "$DEVTYPE" "$RUNTIME_ID")"
+  xcrun simctl list devices | grep "$SIM_UDID" | tee "$OUT/device.txt"
+  # simctl boot blocks until the device is up, so it goes to the background; `wait` joins it later.
   date +%s > "$OUT/boot-started-at"
+  nohup xcrun simctl boot "$SIM_UDID" > "$OUT/boot.log" 2>&1 &
+  echo "SIM_UDID=$SIM_UDID" | tee "$OUT/sim.env"
+  cat "$OUT/sim.env" >> "${GITHUB_ENV:-/dev/null}"
   exit 0
 fi
 

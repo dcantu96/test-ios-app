@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCHEME="${SCHEME:-CloudSim}"
 OUT="${OUT:-$PWD/out}"
-UDID="${UDID_E2E:?run scripts/sim.sh prepare first}"
+UDID="${SIM_UDID:?run scripts/sim.sh prepare first}"
 mkdir -p "$OUT"
 
 echo "::group::Run end-to-end UI tests"

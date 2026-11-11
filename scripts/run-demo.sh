@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Record the demo walkthrough (DemoTests/) on the demo simulator against its own API instance (port 8788, its own
-# database, so e2e data never shows up in the video), from the build that scripts/build.sh made.
+# Record the demo walkthrough (DemoTests/) against the live API, from the build that scripts/build.sh made.
+# It runs on its own machine (CI's "demo" job), so its database holds only what the walkthrough creates.
 # Produces ./out-demo/raw.mp4 (the Simulator's screen) and ./out-demo/markers.json (captions, taps,
 # fast-forwards, and the moment the recording started), which demo/compose.py turns into the MP4.
 # This is a preview, not a test gate: the e2e suite (run-e2e.sh) is what guards main.
@@ -8,8 +8,8 @@ set -euo pipefail
 
 SCHEME="${SCHEME:-CloudSimDemo}"
 OUT="${OUT:-$PWD/out-demo}"
-UDID="${UDID_DEMO:?run scripts/sim.sh prepare with DEMO=1 first}"
-API_URL="${DEMO_API_URL:-http://localhost:8788}"
+UDID="${SIM_UDID:?run scripts/sim.sh prepare first}"
+API_URL="${DEMO_API_URL:-http://localhost:8787}"
 mkdir -p "$OUT"
 
 echo "::group::Record the walkthrough"

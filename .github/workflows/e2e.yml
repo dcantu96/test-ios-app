@@ -1,12 +1,12 @@
 name: CI
 
-# One Mac job does all the iOS work, in parallel wherever it can:
-#   - the Simulators start booting first (that's the slowest thing on a fresh runner) while Postgres, the API
-#     tests and one shared build happen;
-#   - then the e2e suite (the merge gate) and, on PRs, the demo walkthrough run at the same time on two
-#     Simulators, each against its own API and database.
-# The demo MP4 is composed afterwards on a cheap Linux runner, so it never holds up the "e2e" check.
-# Make the "e2e" check required on main.
+# Two Mac machines in parallel, plus a Linux one:
+#   e2e         the merge gate: API tests against Postgres, then UITests/ driving the app in the newest iOS
+#               Simulator against the live API. Make the "e2e" check required on main.
+#   demo        (PRs) the human-paced walkthrough in DemoTests/, recorded. Never blocks the merge.
+#   demo-video  composes the recording into a 1080p60 MP4 on Linux and posts it on the PR.
+# Each Mac boots one Simulator in the background while it installs, starts the backend and builds
+# (.github/actions/mac-setup); a booted, migrated Simulator is cached per runner image.
 on:
   pull_request:
     branches: [main]
@@ -28,63 +28,30 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  BRANCH: ${{ github.head_ref || github.ref_name }}
+
 jobs:
   e2e:
     name: e2e
-    # Xcode 27 / macOS 27 image (Apple Silicon). Newest Apple toolchain GitHub hosts.
+    # Xcode 27 / macOS 27 image (Apple Silicon, 5 CPUs). Newest Apple toolchain GitHub hosts.
     runs-on: xcode-27
-    timeout-minutes: 40
+    timeout-minutes: 30
     env:
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PUBLISH_BRANCH: e2e-output/${{ github.head_ref || github.ref_name }}
-      DEMO: ${{ (github.event_name == 'pull_request' || inputs.demo) && '1' || '0' }}
-    outputs:
-      demo: ${{ steps.test.outputs.demo }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Start booting the Simulator(s)
-        run: bash scripts/sim.sh prepare
-
-      - uses: actions/setup-node@v5
+      - id: setup
+        uses: ./.github/actions/mac-setup
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: api/package-lock.json
+          scheme: CloudSim
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Postgres + API tests + API
-        run: bash scripts/start-backend.sh
-
-      - name: Build app and UI tests once
-        run: DEMO_SCHEME=$([ "$DEMO" = "1" ] && echo CloudSimDemo) bash scripts/build.sh
-
-      - name: E2E suite (and the demo walkthrough, in parallel)
-        id: test
+      - name: E2E suite
         run: |
-          if [ "$DEMO" = "1" ]; then
-            ( bash scripts/sim.sh wait "$UDID_DEMO" && OUT="$PWD/out-demo" bash scripts/run-demo.sh; echo $? > demo-status ) > demo-run.log 2>&1 &
-            DEMO_PID=$!
-          fi
-          bash scripts/sim.sh wait "$UDID_E2E"
-          set +e; bash scripts/run-e2e.sh; E2E=$?; set -e
-          if [ "$DEMO" = "1" ]; then
-            wait "$DEMO_PID" || true
-            echo "::group::Demo walkthrough"; cat demo-run.log; echo "::endgroup::"
-            if [ "$(cat demo-status 2>/dev/null)" = "0" ] && [ -f out-demo/markers.json ]; then echo "demo=recorded" >> "$GITHUB_OUTPUT"; fi
-          fi
-          exit "$E2E"
-
-      - name: Upload e2e results
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: e2e-output
-          path: out/
-          retention-days: 7
-          if-no-files-found: warn
+          bash scripts/sim.sh wait "$SIM_UDID"
+          bash scripts/run-e2e.sh
 
       - name: Publish screenshots to the e2e-output branch
         if: always()
@@ -92,8 +59,44 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/publish-output.sh
 
-      - name: Hand the demo recording to the compose job
-        if: always() && steps.test.outputs.demo == 'recorded'
+      - name: Upload e2e results
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-output
+          path: out/
+          retention-days: 7
+
+      - name: Shut down the Simulator for caching
+        if: always() && steps.setup.outputs.sim-cache-hit != 'true'
+        run: |
+          xcrun simctl shutdown all || true
+          du -sh ~/Library/Developer/CoreSimulator/Devices
+
+      - name: Cache the booted Simulator devices
+        if: always() && steps.setup.outputs.sim-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Developer/CoreSimulator/Devices
+          key: ${{ steps.setup.outputs.sim-cache-key }}
+
+  demo:
+    if: github.event_name == 'pull_request' || inputs.demo
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/mac-setup
+        with:
+          scheme: CloudSimDemo
+
+      - name: Record the walkthrough
+        run: |
+          bash scripts/sim.sh wait "$SIM_UDID"
+          OUT="$PWD/out-demo" bash scripts/run-demo.sh
+
+      - name: Hand the recording to the compose job
         uses: actions/upload-artifact@v5
         with:
           name: demo-raw
@@ -106,13 +109,10 @@ jobs:
           retention-days: 1
 
   demo-video:
-    needs: e2e
-    if: always() && needs.e2e.outputs.demo == 'recorded'
+    needs: demo
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      BRANCH: ${{ github.head_ref || github.ref_name }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PR: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v5
@@ -134,13 +134,6 @@ jobs:
           FOOTER="${PR:+PR #$PR · }$BRANCH · ${HEAD_SHA::7} · $DEVICE, $RUNTIME · $XCODE"
           python3 demo/compose.py --recording raw/out-demo/raw.mp4 --markers raw/out-demo/markers.json \
             --out demo.mp4 --footer "$FOOTER" --quality high
-
-      - name: Keep a copy on the run
-        uses: actions/upload-artifact@v5
-        with:
-          name: demo-video
-          path: demo.mp4
-          retention-days: 14
 
       - name: Publish the preview branch
         env:
