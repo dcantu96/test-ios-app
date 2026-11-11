@@ -47,12 +47,21 @@ final class DemoWalkthrough: XCTestCase {
                 chip: "GET /capsules/:id  \u{2192}  423 Locked")
         pause(1.8)
         tap(rows.firstMatch)
-        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10))
+        XCTAssertTrue(banner("Knock #1").waitForExistence(timeout: 10))
         pause(3.0)
 
-        // 3. A note for ten seconds: watch it count down (8x), then break the seal.
+        // 3. Knock again: the server counts every early knock, and the sealed row shows the tally.
+        chapter(title: "Knock again. It's counted.",
+                sub: "The server remembers every early knock, and tells you when it opens.",
+                chip: "423 Locked  \u{00B7}  knocks: 2")
+        pause(1.4)
+        tap(rows.firstMatch)
+        XCTAssertTrue(banner("Knock #2").waitForExistence(timeout: 10))
+        pause(3.8)
+
+        // 4. A note for ten seconds: watch it count down (8x), then break the seal. Nobody knocked on this one.
         chapter(title: "When time is up, break the seal.",
-                sub: "This one opens in ten seconds. Only then does the server hand it over.",
+                sub: "This one opens in ten seconds. Wait it out: no knocks on record.",
                 chip: "GET /capsules/:id  \u{2192}  200 OK")
         pause(1.2)
         tap(field)
@@ -74,8 +83,8 @@ final class DemoWalkthrough: XCTestCase {
         XCTAssertTrue(app.staticTexts["revealedMessage"].waitForExistence(timeout: 10))
         pause(3.6)
 
-        // 4. Quit and reopen. The home screen and launch screen in between are cut out.
-        chapter(title: "Still there after a relaunch.", sub: "Quit, reopen: both capsules come back from Postgres.")
+        // 5. Quit and reopen. The home screen and launch screen in between are cut out.
+        chapter(title: "Still there after a relaunch.", sub: "Quit, reopen: both capsules come back from Postgres, knocks and all.")
         pause(1.0)
         let relaunchStart = Date()
         app.terminate()
@@ -85,7 +94,7 @@ final class DemoWalkthrough: XCTestCase {
         XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 2))
         waitUntilDrawn()
         cut(from: relaunchStart)
-        pause(3.6)
+        pause(4.2)
 
         chapter(style: "end", title: "Time Capsule", sub: "SwiftUI app, Node API, Postgres. Recorded on a cloud Mac.")
         pause(4.0)
@@ -104,6 +113,11 @@ final class DemoWalkthrough: XCTestCase {
     }
 
     private func now() -> Double { Date().timeIntervalSince1970 }
+
+    @MainActor
+    private func banner(_ text: String) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "identifier == 'lockedBanner' AND label CONTAINS %@", text)).firstMatch
+    }
 
     /// The only thing that sets the pace: a deliberate hold, kept as is in the video.
     private func pause(_ seconds: Double) {

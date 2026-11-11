@@ -71,7 +71,8 @@ final class CapsuleStore {
                 revealed = opened
             case .stillSealed(let sealed):
                 syncClock(sealed)
-                let notice = "Still sealed. The server says \(Self.countdown(TimeInterval(sealed.secondsRemaining))) to go."
+                replace(sealed) // the server counted this knock
+                let notice = "Knock #\(sealed.knocks). Still sealed: \(Self.countdown(TimeInterval(sealed.secondsRemaining))) to go."
                 lockedNotice = notice
                 Task {
                     try? await Task.sleep(for: .seconds(4))

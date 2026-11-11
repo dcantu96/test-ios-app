@@ -149,6 +149,12 @@ struct CapsuleRow: View {
                             Text("Opens in \(CapsuleStore.countdown(remaining))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
+                            if let knocks = capsule.knockSummary {
+                                Text("\(Image(systemName: "hand.raised.fill")) \(knocks)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color(red: 0.62, green: 0.08, blue: 0.12))
+                                    .contentTransition(.numericText())
+                            }
                         }
                     }
                     Spacer(minLength: 0)
@@ -216,6 +222,11 @@ struct RevealView: View {
                 Text("Sealed \(Text(capsule.sealedAt, style: .relative)) ago")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                Text(capsule.knockVerdict)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color(red: 0.62, green: 0.08, blue: 0.12))
+                    .accessibilityIdentifier("knockVerdict")
             }
             .padding(28)
             .frame(maxWidth: .infinity)
