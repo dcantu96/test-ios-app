@@ -1,6 +1,6 @@
 name: Diag Simulator boot
 
-# Temporary: what keeps a Simulator busy after it reports booted. Runs on pushes to diag/* branches.
+# Temporary: does a Simulator that has finished its first-run work boot quietly the second time? Runs on diag/* pushes.
 on:
   push:
     branches: ["diag/**"]
@@ -8,7 +8,7 @@ on:
 jobs:
   boot:
     runs-on: xcode-27
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -16,16 +16,20 @@ jobs:
       - name: Measure
         run: |
           set +e
+          sudo mdutil -a -i off > /dev/null 2>&1; echo "Spotlight off"
           stamp() { echo "$(( $(date +%s) - T0 ))s  $1"; }
-          NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env
+          load() { sysctl -n vm.loadavg | awk '{print $2}'; }
+          watch() { for i in $(seq 1 $1); do printf "+%ss load %s | %s\n" "$(( $(date +%s) - T0 ))" "$(load)" "$(ps -Ao pcpu,comm -r | sed -n '2,4p' | sed -E 's|/[^ ]*/||' | tr -s ' ' | tr '\n' ';')"; sleep 10; done; }
+          NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env; export SIM_UDID
           curl -fsSL -o /tmp/xg.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip && unzip -q -o /tmp/xg.zip -d /tmp && export PATH=/tmp/xcodegen/bin:$PATH
           bash scripts/start-backend.sh > /tmp/backend.log 2>&1
-          T0=$(date +%s)
-          ( for i in $(seq 1 16); do echo "--- +$(( $(date +%s) - T0 ))s load $(sysctl -n vm.loadavg)"; ps -Ao pcpu,comm -r | head -6 | tail -5 | sed -E 's|/.*/||'; sleep 10; done ) > /tmp/top.log &
-          xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"
-          sleep 150; stamp "idle 150s"
-          cat /tmp/top.log
-          T0=$(date +%s); SIM_UDID=$SIM_UDID bash scripts/build.sh >/dev/null; stamp "build (sim settled)"
-          T0=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e1.log 2>&1; stamp "e2e exit $?"
-          grep -E "passed|failed|error" /tmp/e2e1.log | head -5; tail -30 out/xcodebuild-test.log | grep -vE "^\s*$" | tail -15
-          grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -3
+          echo "=== first boot"
+          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"; watch 24
+          xcrun simctl shutdown "$SIM_UDID"; sleep 5
+          echo "=== second boot (settled device)"
+          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"; watch 9
+          T0=$(date +%s); bash scripts/build.sh >/dev/null; stamp "build"
+          T0=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e.log 2>&1; stamp "e2e exit $?"
+          grep -E "Test Case.*(passed|failed)" /tmp/e2e.log | head -2
+          grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -2
+          du -sh ~/Library/Developer/CoreSimulator/Devices/$SIM_UDID
