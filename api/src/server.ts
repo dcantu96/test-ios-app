@@ -10,6 +10,7 @@ type Row = {
   sealed_at: Date;
   unlocks_at: Date;
   opened_at: Date | null;
+  knocks: number;
   server_now: Date;
 };
 
@@ -28,6 +29,7 @@ function present(row: Row, { reveal }: { reveal: boolean }) {
     openedAt: row.opened_at?.toISOString() ?? null,
     secondsRemaining: Math.max(0, Math.ceil(remainingMs / 1000)),
     serverNow: row.server_now.toISOString(),
+    knocks: row.knocks,
     message: reveal && status !== "sealed" ? row.message : null,
   };
 }
@@ -59,7 +61,7 @@ class HttpError extends Error {
   }
 }
 
-const COLUMNS = "id, message, sealed_at, unlocks_at, opened_at, now() as server_now";
+const COLUMNS = "id, message, sealed_at, unlocks_at, opened_at, knocks, now() as server_now";
 
 export function createApp(pool: Pool): Server {
   async function route(req: IncomingMessage, res: ServerResponse) {
@@ -96,20 +98,31 @@ export function createApp(pool: Pool): Server {
       return send(res, 200, rows.map((r) => present(r, { reveal: r.opened_at !== null })));
     }
 
-    // GET /capsules/:id  -> 423 while sealed, otherwise opens it and reveals the message
+    // GET /capsules/:id  -> 423 while sealed (and counts the knock), otherwise opens it and reveals the message
     if (req.method === "GET" && parts.length === 2) {
       const id = parts[1];
       if (!UUID.test(id)) throw new HttpError(404, "Capsule not found");
-      const { rows } = await pool.query<Row>(
-        `update capsules set opened_at = coalesce(opened_at, now())
-         where id = $1 and unlocks_at <= now()
-         returning ${COLUMNS}`,
-        [id],
-      );
+      const open = () =>
+        pool.query<Row>(
+          `update capsules set opened_at = coalesce(opened_at, now())
+           where id = $1 and unlocks_at <= now()
+           returning ${COLUMNS}`,
+          [id],
+        );
+      const { rows } = await open();
       if (rows[0]) return send(res, 200, present(rows[0], { reveal: true }));
 
-      const sealed = await pool.query<Row>(`select ${COLUMNS} from capsules where id = $1`, [id]);
-      if (!sealed.rows[0]) throw new HttpError(404, "Capsule not found");
+      // Too early: that's a knock. Counted atomically, so concurrent knocks all count.
+      const sealed = await pool.query<Row>(
+        `update capsules set knocks = knocks + 1 where id = $1 and unlocks_at > now() returning ${COLUMNS}`,
+        [id],
+      );
+      if (!sealed.rows[0]) {
+        // It may have unlocked between the two queries: then it isn't a knock, it opens.
+        const late = await open();
+        if (late.rows[0]) return send(res, 200, present(late.rows[0], { reveal: true }));
+        throw new HttpError(404, "Capsule not found");
+      }
       const capsule = present(sealed.rows[0], { reveal: false });
       return send(res, 423, { error: "Still sealed", ...capsule });
     }

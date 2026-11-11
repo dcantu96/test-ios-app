@@ -73,6 +73,39 @@ describe("time capsules", () => {
     assert.equal(reopened.body.openedAt, opened.body.openedAt, "first opening time is kept");
   });
 
+  test("every early knock is counted, and the count is revealed with the message", async () => {
+    const secret = `knock knock ${Date.now()}`;
+    const created = await call("/capsules", { method: "POST", body: { message: secret, unlockInSeconds: 1 } });
+    assert.equal(created.body.knocks, 0);
+
+    const first = await call(`/capsules/${created.body.id}`);
+    assert.equal(first.status, 423);
+    assert.equal(first.body.knocks, 1, "the refusal says which knock this was");
+    const second = await call(`/capsules/${created.body.id}`);
+    assert.equal(second.body.knocks, 2);
+    assert.equal(second.body.message, null);
+
+    const listed = ((await call("/capsules")).body as unknown as any[]).find((c) => c.id === created.body.id);
+    assert.equal(listed.knocks, 2, "the list shows the knocks on a sealed capsule");
+
+    await sleep(1_300);
+    const opened = await call(`/capsules/${created.body.id}`);
+    assert.equal(opened.status, 200);
+    assert.equal(opened.body.message, secret);
+    assert.equal(opened.body.knocks, 2, "opening on time isn't a knock");
+
+    const again = await call(`/capsules/${created.body.id}`);
+    assert.equal(again.body.knocks, 2, "reading an opened capsule isn't a knock either");
+  });
+
+  test("a capsule opened without knocking reports zero knocks", async () => {
+    const created = await call("/capsules", { method: "POST", body: { message: "patient", unlockInSeconds: 1 } });
+    await sleep(1_300);
+    const opened = await call(`/capsules/${created.body.id}`);
+    assert.equal(opened.status, 200);
+    assert.equal(opened.body.knocks, 0);
+  });
+
   test("rejects bad input", async () => {
     assert.equal((await call("/capsules", { method: "POST", body: { message: "", unlockInSeconds: 10 } })).status, 400);
     assert.equal((await call("/capsules", { method: "POST", body: { message: "x".repeat(501), unlockInSeconds: 10 } })).status, 400);

@@ -13,7 +13,7 @@ final class TimeCapsuleUITests: XCTestCase {
     }
 
     @MainActor
-    func testSealRefuseEarlyOpenWaitThenReveal() throws {
+    func testSealKnockEarlyWaitThenReveal() throws {
         let tag = String(UUID().uuidString.prefix(6))
         let secret = "Dear future me, remember tonight (\(tag))"
         let letter = "Open this next year (\(tag))"
@@ -33,36 +33,46 @@ final class TimeCapsuleUITests: XCTestCase {
         snap("2 Sealed for 10 seconds")
 
         // 3. Seal a letter for a year, and try to open it: the server refuses (HTTP 423) and the app says so.
+        //    Knocking only ever happens on this capsule: it can't unlock during the test, however slow CI is.
         seal(letter, for: "1y", field: field)
         let yearLong = rows.firstMatch
         XCTAssertTrue(waitFor(rows, count: 2), "second capsule never showed up")
         XCTAssertEqual(yearLong.value as? String, "sealed")
         yearLong.tap()
-        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10), "server didn't refuse an early open")
+        // The banner shows for 4 s: wait for the banner with the right text in one query, not exists-then-read.
+        XCTAssertTrue(lockedBanner("Knock #1").waitForExistence(timeout: 10), "server didn't refuse an early open as knock #1")
+        snap("3 Server refused to open the year-long capsule") // first: the banner only shows for 4 s
         XCTAssertFalse(rowShowing(letter).exists, "a refused capsule must not show its message")
-        snap("3 Server refused to open the year-long capsule")
 
-        // 4. The 10-second capsule (now second in the list) unlocks; open it and read it.
+        // 4. Knock again: the server counts it, and the sealed row says so.
+        yearLong.tap()
+        XCTAssertTrue(lockedBanner("Knock #2").waitForExistence(timeout: 10), "the second knock wasn't counted")
+        XCTAssertTrue(rowShowing("Knocked 2 times").waitForExistence(timeout: 10), "the sealed row doesn't show the knocks")
+        snap("4 Second knock counted")
+
+        // 5. The 10-second capsule (now second in the list) unlocks; open it and read it. Nobody knocked on it.
         let ten = rows.element(boundBy: 1)
         let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: ten)
         wait(for: [ready], timeout: 30)
-        snap("4 Ready to open")
+        snap("5 Ready to open")
         ten.tap()
         let revealed = app.staticTexts["revealedMessage"]
         XCTAssertTrue(revealed.waitForExistence(timeout: 10), "message was never revealed")
         XCTAssertEqual(revealed.label, secret)
+        XCTAssertEqual(app.staticTexts["knockVerdict"].label, "No knocks. You waited.")
         sleep(1) // let the crack-open animation settle for the screenshot
-        snap("5 Seal cracked, message revealed")
+        snap("6 Seal cracked, message revealed")
 
-        // 5. Kill and relaunch: both capsules come back from Postgres, the opened one with its message,
-        //    the year-long one still sealed and still without its message.
+        // 6. Kill and relaunch: both capsules come back from Postgres, the opened one with its message,
+        //    the year-long one still sealed, still without its message, and still counting its two knocks.
         app.terminate()
         app = launchApp()
         XCTAssertTrue(rowShowing(secret).waitForExistence(timeout: 20), "opened capsule didn't survive a relaunch")
         XCTAssertTrue(waitFor(rows, count: 2), "a capsule went missing after the relaunch")
         XCTAssertEqual(rows.firstMatch.value as? String, "sealed")
+        XCTAssertTrue(rowShowing("Knocked 2 times").waitForExistence(timeout: 10), "the knocks weren't kept in Postgres")
         XCTAssertFalse(rowShowing(letter).exists, "the year-long capsule leaked its message after a relaunch")
-        snap("6 After relaunch, loaded from Postgres")
+        snap("7 After relaunch, loaded from Postgres")
     }
 
     // MARK: - Helpers
@@ -90,6 +100,11 @@ final class TimeCapsuleUITests: XCTestCase {
     private func waitFor(_ query: XCUIElementQuery, count: Int, timeout: TimeInterval = 10) -> Bool {
         let e = expectation(for: NSPredicate(format: "count >= %d", count), evaluatedWith: query)
         return XCTWaiter().wait(for: [e], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func lockedBanner(_ text: String) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "identifier == 'lockedBanner' AND label CONTAINS %@", text)).firstMatch
     }
 
     @MainActor

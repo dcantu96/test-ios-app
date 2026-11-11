@@ -4,6 +4,8 @@ Write a message to your future self and seal it for 10 seconds, a minute, a day 
 
 The twist: **the server is the lock.** While a capsule is sealed, the API never sends its message, not even to the app. Asking early gets `423 Locked` with the seconds remaining. When the time is up, tapping the capsule cracks the wax seal open and the server reveals the message (and records when you first opened it).
 
+**Knocks.** Every early tap is a knock, and the server counts them. The locked banner says which knock it was, a sealed capsule shows its tally ("Knocked 2 times"), and when it finally opens it tells you how patient you were: "You knocked 2 times before it was time", or "No knocks. You waited."
+
 ## Layout
 
 | Path | What |
@@ -28,19 +30,19 @@ The twist: **the server is the lock.** While a capsule is sealed, the API never 
 | `GET /health` | DB check |
 | `POST /capsules` `{ message, unlockInSeconds }` | Seal a capsule (the response never includes the message) |
 | `GET /capsules` | Newest first; only opened capsules include their message |
-| `GET /capsules/:id` | `423 Locked` while sealed; otherwise opens it and returns the message |
+| `GET /capsules/:id` | `423 Locked` while sealed, and counts the knock; otherwise opens it and returns the message with its knock count |
 
 ## The e2e test
 
 `UITests/TimeCapsuleUITests.swift` drives the real app against the real API and database:
 
-1. Launch, then write a message and seal it for 10 seconds.
-2. Check that the capsule shows as sealed and the message is not on screen.
-3. Tap it early. The server answers 423 and the app shows "Still sealed".
-4. Wait for the countdown, then tap again. The seal cracks and the message is revealed.
-5. Kill and relaunch the app. The opened capsule comes back from Postgres.
+1. Launch, then seal a note for 10 seconds. Its countdown runs during the next steps.
+2. Seal a letter for a year and tap it early. The server answers 423 and the app shows "Knock #1".
+3. Knock again: "Knock #2", and the sealed row says "Knocked 2 times".
+4. When the 10-second note is ready, open it. The seal cracks, the message is revealed, and it says "No knocks. You waited."
+5. Kill and relaunch the app. Both capsules come back from Postgres: the opened note with its message, the letter still sealed and still showing its two knocks.
 
-Each step saves a screenshot.
+All knocking happens on the year-long letter, so nothing can unlock mid-test however slow the machine is. Each step saves a screenshot.
 
 ## CI
 

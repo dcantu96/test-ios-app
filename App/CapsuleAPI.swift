@@ -9,8 +9,28 @@ struct Capsule: Identifiable, Decodable, Sendable, Equatable {
     let openedAt: Date?
     let secondsRemaining: Int
     let serverNow: Date
+    /// How many times someone tried to open it too early. The server counts; opening on time isn't a knock.
+    let knocks: Int
     /// Only present once the capsule has been opened. The server never sends it while sealed.
     let message: String?
+
+    /// "Knocked once", "Knocked 2 times"; nil if nobody knocked.
+    var knockSummary: String? {
+        switch knocks {
+        case 0: nil
+        case 1: "Knocked once"
+        default: "Knocked \(knocks) times"
+        }
+    }
+
+    /// What the reveal says about the wait.
+    var knockVerdict: String {
+        switch knocks {
+        case 0: "No knocks. You waited."
+        case 1: "You knocked once before it was time."
+        default: "You knocked \(knocks) times before it was time."
+        }
+    }
 }
 
 enum OpenResult: Sendable {
