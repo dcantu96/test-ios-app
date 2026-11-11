@@ -1,6 +1,6 @@
 name: Diag Simulator boot
 
-# Temporary: measures what each phase costs, alone and overlapped. Runs on pushes to diag/* branches.
+# Temporary: what keeps a Simulator busy after it reports booted. Runs on pushes to diag/* branches.
 on:
   push:
     branches: ["diag/**"]
@@ -15,19 +15,17 @@ jobs:
         with: { node-version: 24, cache: npm, cache-dependency-path: api/package-lock.json }
       - name: Measure
         run: |
-          stamp() { echo "$(( $(date +%s) - T ))s  $1"; }
-          T=$(date +%s); NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env; stamp "prepare (no boot)"
-          cat out/device.txt
-          T=$(date +%s); curl -fsSL -o /tmp/xg.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip && unzip -q -o /tmp/xg.zip -d /tmp && export PATH=/tmp/xcodegen/bin:$PATH; stamp "xcodegen download"
-          T=$(date +%s); bash scripts/start-backend.sh > /tmp/backend.log 2>&1; stamp "backend alone"
-          T=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "A: boot alone (iPhone Pro)"
-          T=$(date +%s); SIM_UDID=$SIM_UDID bash scripts/build.sh >/dev/null; stamp "B: build alone (booted sim idle)"
-          T=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e1.log 2>&1; stamp "C: e2e on a sim booted a while ago"
-          grep -E "passed|failed" /tmp/e2e1.log | head -2
-          xcrun simctl shutdown "$SIM_UDID"; rm -rf build
-          T=$(date +%s); ( xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; echo "    boot done at $(( $(date +%s) - T ))s" ) & SIM_UDID=$SIM_UDID bash scripts/build.sh >/dev/null; stamp "D: build done (overlapped with boot)"; wait; stamp "D: boot + build overlapped, both done"
-          T=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e2.log 2>&1; stamp "E: e2e right after boot"
-          grep -E "passed|failed" /tmp/e2e2.log | head -2
-          grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -3
-          T=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e3.log 2>&1; stamp "F: e2e again (warm runner)"
+          set +e
+          stamp() { echo "$(( $(date +%s) - T0 ))s  $1"; }
+          NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env
+          curl -fsSL -o /tmp/xg.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip && unzip -q -o /tmp/xg.zip -d /tmp && export PATH=/tmp/xcodegen/bin:$PATH
+          bash scripts/start-backend.sh > /tmp/backend.log 2>&1
+          T0=$(date +%s)
+          ( for i in $(seq 1 16); do echo "--- +$(( $(date +%s) - T0 ))s load $(sysctl -n vm.loadavg)"; ps -Ao pcpu,comm -r | head -6 | tail -5 | sed -E 's|/.*/||'; sleep 10; done ) > /tmp/top.log &
+          xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"
+          sleep 150; stamp "idle 150s"
+          cat /tmp/top.log
+          T0=$(date +%s); SIM_UDID=$SIM_UDID bash scripts/build.sh >/dev/null; stamp "build (sim settled)"
+          T0=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e1.log 2>&1; stamp "e2e exit $?"
+          grep -E "passed|failed|error" /tmp/e2e1.log | head -5; tail -30 out/xcodebuild-test.log | grep -vE "^\s*$" | tail -15
           grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -3
