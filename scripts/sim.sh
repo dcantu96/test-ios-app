@@ -22,11 +22,6 @@ if [ "$cmd" = "prepare" ]; then
   xcodebuild -version | tee "$OUT/xcode-version.txt"
   echo "CPUs: $(sysctl -n hw.ncpu), memory: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB" | tee "$OUT/machine.txt"
 
-  if [ "${SIM_CACHE_HIT:-}" = "true" ]; then
-    # The Simulator devices came from the cache: restart CoreSimulator so it reads them from disk.
-    sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true
-    echo "Using the cached, settled Simulator ($(du -sh ~/Library/Developer/CoreSimulator/Devices | cut -f1))"
-  fi
   # The runner's Spotlight indexes every new Simulator device at full CPU; we never search the runner.
   sudo mdutil -a -i off > /dev/null 2>&1 || true
   xcrun simctl list runtimes -j > "$OUT/runtimes.json"
@@ -67,9 +62,10 @@ fi
 
 if [ "$cmd" = "boot" ]; then
   UDID="$2"
-  if [ "${SIM_PREWARM_AX:-1}" = "1" ]; then
-    # XCUITest turns accessibility on in every process when the test runner starts, which takes ~40 s on a
-    # freshly booted, busy Simulator. Turned on in the device's preferences before boot, it loads with boot.
+  if [ "${SIM_PREWARM_AX:-0}" = "1" ]; then
+    # Optional. XCUITest turns accessibility on in every process when the test runner starts (~40 s on a busy,
+    # freshly booted Simulator). Turned on in the device's preferences before boot, that drops to ~5 s, but in
+    # our measurements the time reappeared in the app's first launch, so it's off by default.
     PREFS=~/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/Preferences
     mkdir -p "$PREFS"
     for k in AccessibilityEnabled ApplicationAccessibilityEnabled AutomationEnabled; do
