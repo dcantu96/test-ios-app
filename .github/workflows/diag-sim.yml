@@ -1,6 +1,6 @@
 name: Diag Simulator boot
 
-# Temporary: measures what a Simulator boot spends its time on. Runs on pushes to diag/* branches.
+# Temporary: measures what each phase costs, alone and overlapped. Runs on pushes to diag/* branches.
 on:
   push:
     branches: ["diag/**"]
@@ -8,20 +8,26 @@ on:
 jobs:
   boot:
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, cache: npm, cache-dependency-path: api/package-lock.json }
       - name: Measure
         run: |
-          set -x
-          NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env; wait || true
-          for d in ~/Library/Developer/CoreSimulator/Caches /Library/Developer/CoreSimulator/Caches ~/Library/Developer/CoreSimulator/Volumes /Library/Developer/CoreSimulator/Volumes; do echo "BEFORE $d"; sudo du -sh "$d"/* 2>/dev/null | head; done
-          ( for i in 1 2 3 4 5 6 7 8; do sleep 15; echo "--- top at +$((i*15))s"; top -l 1 -o cpu -n 6 -stats pid,command,cpu | tail -7; done ) &
-          T=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; echo "FIRST BOOT: $(( $(date +%s) - T ))s"
-          kill %1 2>/dev/null || true
-          for d in ~/Library/Developer/CoreSimulator/Caches /Library/Developer/CoreSimulator/Caches; do echo "AFTER $d"; sudo du -sh "$d"/* 2>/dev/null | head; sudo find "$d" -maxdepth 5 -size +20M 2>/dev/null | head; done
-          xcrun simctl shutdown "$SIM_UDID"
-          T=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; echo "SECOND BOOT (same device): $(( $(date +%s) - T ))s"
-          NEW=$(xcrun simctl create "Second" "$(xcrun simctl list devices -j | python3 -c "import json,sys; d=[x for v in json.load(sys.stdin)['devices'].values() for x in v if x['udid']=='$SIM_UDID'][0]; print(d['deviceTypeIdentifier'])")" "$(xcrun simctl list devices -j | python3 -c "import json,sys; print([k for k,v in json.load(sys.stdin)['devices'].items() if any(x['udid']=='$SIM_UDID' for x in v)][0])")")
-          T=$(date +%s); xcrun simctl bootstatus "$NEW" -b >/dev/null; echo "NEW DEVICE BOOT: $(( $(date +%s) - T ))s"
-          du -sh ~/Library/Developer/CoreSimulator/Devices/$SIM_UDID ~/Library/Developer/CoreSimulator/Devices/$NEW
+          stamp() { echo "$(( $(date +%s) - T ))s  $1"; }
+          T=$(date +%s); NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env; stamp "prepare (no boot)"
+          cat out/device.txt
+          T=$(date +%s); curl -fsSL -o /tmp/xg.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip && unzip -q -o /tmp/xg.zip -d /tmp && export PATH=/tmp/xcodegen/bin:$PATH; stamp "xcodegen download"
+          T=$(date +%s); bash scripts/start-backend.sh > /tmp/backend.log 2>&1; stamp "backend alone"
+          T=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "A: boot alone (iPhone Pro)"
+          T=$(date +%s); SIM_UDID=$SIM_UDID bash scripts/build.sh >/dev/null; stamp "B: build alone (booted sim idle)"
+          T=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e1.log 2>&1; stamp "C: e2e on a sim booted a while ago"
+          grep -E "passed|failed" /tmp/e2e1.log | head -2
+          xcrun simctl shutdown "$SIM_UDID"; rm -rf build
+          T=$(date +%s); ( xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; echo "    boot done at $(( $(date +%s) - T ))s" ) & SIM_UDID=$SIM_UDID bash scripts/build.sh >/dev/null; stamp "D: build done (overlapped with boot)"; wait; stamp "D: boot + build overlapped, both done"
+          T=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e2.log 2>&1; stamp "E: e2e right after boot"
+          grep -E "passed|failed" /tmp/e2e2.log | head -2
+          grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -3
+          T=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e3.log 2>&1; stamp "F: e2e again (warm runner)"
+          grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -3

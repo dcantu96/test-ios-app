@@ -40,11 +40,14 @@ PY
 )"
   # The iPhone Pro device type this runtime supports, and an existing device of it (if any).
   read -r DEVTYPE SIM_UDID <<<"$(python3 - "$OUT/runtimes.json" "$RUNTIME_ID" <<'PY'
-import json, subprocess, sys
+import json, re, subprocess, sys
 r = [x for x in json.load(open(sys.argv[1]))["runtimes"] if x["identifier"] == sys.argv[2]][0]
 phones = [d for d in r.get("supportedDeviceTypes", []) if d.get("productFamily") == "iPhone"]
-pref = [d for d in phones if "Pro" in d["name"] and "Max" not in d["name"]] or phones
-devtype = pref[-1]
+pref = [d for d in phones if re.fullmatch(r"iPhone \d+ Pro", d["name"])] or phones
+# supportedDeviceTypes is oldest first by release, not by model: pick the highest model number.
+model = lambda d: int((re.search(r"iPhone (\d+)", d["name"]) or re.search(r"(\d+)", "0")).group(1))
+devtype = max(pref, key=model)
+print("Device type:", devtype["name"], file=sys.stderr)
 devs = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "-j"]))["devices"].get(sys.argv[2], [])
 match = [d for d in devs if d.get("isAvailable") and d.get("deviceTypeIdentifier") == devtype["identifier"]]
 print(devtype["identifier"], match[0]["udid"] if match else "-")
