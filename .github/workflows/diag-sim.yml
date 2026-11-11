@@ -24,8 +24,8 @@ jobs:
         run: |
           set +e
           stamp() { echo "$(( $(date +%s) - T0 ))s  $1"; }
-          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "boot (settled)"
-          for i in 1 2 3 4 5 6; do echo "load $(sysctl -n vm.loadavg | awk '{print $2}')"; sleep 5; done
+          T0=$(date +%s); SIM_PREWARM_AX=1 bash scripts/sim.sh boot "$SIM_UDID"; stamp "boot (settled, accessibility on)"
+          for i in 1 2 3 4 5 6 7 8; do echo "load $(sysctl -n vm.loadavg | awk '{print $2}') | $(ps -Ao pcpu,comm -r | sed -n '2,5p' | awk '{n=split($2,a,"/"); printf "%s %s; ", $1, a[n]}')"; sleep 8; done
           T0=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e.log 2>&1; stamp "e2e exit $?"
           grep -E "Test Case.*(passed|failed)" /tmp/e2e.log
           grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -2
