@@ -39,7 +39,21 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dcantu96.CloudSimUITests
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_TARGET_NAME: CloudSim
+  # Not part of the e2e gate: a human-paced walkthrough that CI records as a PR's demo video.
+  CloudSimDemo:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [DemoTests]
+    dependencies:
+      - target: CloudSim
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.dcantu96.CloudSimDemo
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: CloudSim
 schemes:
+  # The e2e suite: the merge gate.
   CloudSim:
     build:
       targets:
@@ -50,3 +64,12 @@ schemes:
     test:
       config: Debug
       targets: [CloudSimUITests]
+  # The demo recording only.
+  CloudSimDemo:
+    build:
+      targets:
+        CloudSim: all
+        CloudSimDemo: [test]
+    test:
+      config: Debug
+      targets: [CloudSimDemo]

@@ -1,0 +1,41 @@
+name: Mac setup
+description: >
+  Everything a Mac job does before booting the Simulator, back to back: pick the Simulator (Spotlight off),
+  Node, XcodeGen, Postgres + API tests + API, and the build. The Simulator boots after this (scripts/sim.sh
+  boot): a freshly booted iOS Simulator saturates the runner for minutes, so nothing heavy may overlap it.
+inputs:
+  scheme:
+    description: Scheme to build for testing (CloudSim for e2e, CloudSimDemo for the demo)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Pick the Simulator
+      shell: bash
+      run: bash scripts/sim.sh prepare
+
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: api/package-lock.json
+
+    # The release binary is a small download; `brew install` can take minutes on a busy runner.
+    - name: Install XcodeGen
+      shell: bash
+      run: |
+        if curl -fsSL --retry 2 -o "$RUNNER_TEMP/xcodegen.zip" https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip \
+           && unzip -q -o "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"; then
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+        else
+          brew install xcodegen
+        fi
+
+    - name: Postgres + API tests + API
+      shell: bash
+      run: bash scripts/start-backend.sh
+
+    - name: Build app and UI tests
+      shell: bash
+      run: SCHEMES="${{ inputs.scheme }}" bash scripts/build.sh

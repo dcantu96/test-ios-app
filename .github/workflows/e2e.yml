@@ -1,0 +1,149 @@
+name: CI
+
+# Two Macs in parallel, each doing its work back to back (see .github/actions/mac-setup and scripts/sim.sh for
+# why nothing overlaps the Simulator boot):
+#   e2e   the merge gate: API tests against Postgres, then UITests/ driving the app in the newest iOS Simulator
+#         against the live API. Make the "e2e" check required on main.
+#   demo  (PRs) records DemoTests/ at human pace, then composes the 1080p60 MP4 on the same Mac (5 CPUs, with
+#         the Simulator shut down) and posts it on the PR. Never blocks the merge.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "demo/**", "DemoTests/**"]
+  workflow_dispatch:
+    inputs:
+      demo:
+        description: Also record the demo video
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  BRANCH: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  e2e:
+    name: e2e
+    # Xcode 27 / macOS 27 image (Apple Silicon, 5 CPUs, 14 GB). Newest Apple toolchain GitHub hosts.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      PUBLISH_BRANCH: e2e-output/${{ github.head_ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/mac-setup
+        with:
+          scheme: CloudSim
+
+      - name: Boot the Simulator
+        run: bash scripts/sim.sh boot "$SIM_UDID"
+
+      - name: E2E suite
+        run: bash scripts/run-e2e.sh
+
+      - name: Publish screenshots to the e2e-output branch
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-output.sh
+
+      - name: Upload e2e results
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-output
+          path: out/
+          retention-days: 7
+
+  demo:
+    if: github.event_name == 'pull_request' || inputs.demo
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/mac-setup
+        with:
+          scheme: CloudSimDemo
+
+      - name: Boot the Simulator
+        run: SIM_STATUS_BAR=1 bash scripts/sim.sh boot "$SIM_UDID"
+
+      - name: Record the walkthrough
+        run: OUT="$PWD/out-demo" bash scripts/run-demo.sh
+
+      - name: Compose the MP4
+        run: |
+          xcrun simctl shutdown all || true   # free the CPUs for the encoder
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet imageio-ffmpeg pillow numpy
+          export FFMPEG="$("$RUNNER_TEMP/venv/bin/python" -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          DEVICE="$(sed -E 's/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//; s/^ +//; s/ +$//' out/device.txt)"
+          RUNTIME="$(sed -E 's/ \(.*//' out/runtime.txt)"
+          XCODE="$(head -1 out/xcode-version.txt)"
+          FOOTER="${PR:+PR #$PR · }$BRANCH · ${HEAD_SHA::7} · $DEVICE, $RUNTIME · $XCODE"
+          "$RUNNER_TEMP/venv/bin/python" demo/compose.py --recording out-demo/raw.mp4 --markers out-demo/markers.json \
+            --out demo.mp4 --footer "$FOOTER" --quality high --save-source preview/source
+
+      # Checks the finished video (sync, dead air, typing pace, flashes, caption time) and makes contact sheets.
+      # It reports; it never fails the job. Read review.md and every sheet before calling a demo done.
+      - name: Review the MP4
+        run: |
+          export FFMPEG="$("$RUNNER_TEMP/venv/bin/python" -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          mkdir -p preview/sheets
+          "$RUNNER_TEMP/venv/bin/python" demo/review.py demo.mp4 --sheets preview/sheets --out review.md \
+            || printf '## Demo review\n\nThe review script itself failed; see the job log.\n' > review.md
+
+      - name: Publish the preview branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          WORK="$(mktemp -d)"
+          cp demo.mp4 demo.report.json review.md "$WORK/"
+          cp -R preview/sheets preview/source "$WORK/"
+          { printf '# Demo preview\n\nFrom `%s` at `%s`. Thrown away when the PR closes.\n\n[demo.mp4](demo.mp4)\n\n' "$BRANCH" "${HEAD_SHA::7}"; cat review.md
+            printf '\n`source/` holds the synced screen recording and markers: `demo/compose.py --recording source/source.mp4 --markers source/markers.json` redraws the board without a Mac.\n'; } > "$WORK/README.md"
+          cd "$WORK"
+          git init -q -b preview
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Demo preview for ${HEAD_SHA::7}"
+          git push -q --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "preview:refs/heads/demo-preview/$BRANCH"
+
+      - name: Post it on the PR
+        if: env.PR != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/raw/demo-preview/${BRANCH}/demo.mp4"
+          SIZE="$(du -h demo.mp4 | cut -f1)"
+          cat > body.md <<EOF
+          ### Demo preview
+          **[Watch demo.mp4](${URL})** (1080p60, ${SIZE}), recorded from \`${HEAD_SHA::7}\` in the iOS Simulator on a cloud Mac, driving the app against the live API and Postgres.
+
+          This is a preview, not a test: the e2e check is what gates the merge. It's re-recorded on every push and deleted when this PR closes.
+
+          EOF
+          cat review.md >> body.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md --edit-last --create-if-none \
+            || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+
+      - name: Upload the recording if composing failed
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: demo-raw
+          path: out-demo/
+          retention-days: 3

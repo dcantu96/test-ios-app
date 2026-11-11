@@ -5,3 +5,6 @@ out/
 node_modules/
 Support/
 *.xcresult
+out-demo/
+demo.mp4
+__pycache__/
