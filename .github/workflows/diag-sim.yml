@@ -1,41 +1,55 @@
 name: Diag Simulator boot
 
-# Temporary: does stopping iOS's first-run background services calm the Simulator, and does e2e still pass?
+# Temporary experiment: does a cached, fully settled Simulator make a cold PR job fast?
 on:
   push:
     branches: ["diag/**"]
 
 jobs:
-  boot:
+  make-image:
     runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: 24, cache: npm, cache-dependency-path: api/package-lock.json }
-      - name: Measure
+      - uses: ./.github/actions/mac-setup
+        with: { scheme: CloudSim }
+      - name: Boot, quiet, settle, warm up, cache
         run: |
           set +e
-          sudo mdutil -a -i off > /dev/null 2>&1
           stamp() { echo "$(( $(date +%s) - T0 ))s  $1"; }
-          watch() { for i in $(seq 1 $1); do printf "+%ss load %s\n" "$(( $(date +%s) - T0 ))" "$(sysctl -n vm.loadavg | awk '{print $2}')"; sleep 10; done; }
-          TJ=$(date +%s)
-          NO_BOOT=1 OUT=$PWD/out bash scripts/sim.sh prepare >/dev/null; source out/sim.env; export SIM_UDID
-          curl -fsSL -o /tmp/xg.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip && unzip -q -o /tmp/xg.zip -d /tmp && export PATH=/tmp/xcodegen/bin:$PATH
-          T0=$(date +%s); bash scripts/start-backend.sh > /tmp/backend.log 2>&1; stamp "backend (no Simulator running)"
-          T0=$(date +%s); bash scripts/build.sh >/dev/null; stamp "build (no Simulator running)"
-          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"
-          echo "=== services before:"; xcrun simctl spawn "$SIM_UDID" launchctl list | tail -n +2 | awk '{print $3}' | sort | tr '\n' ' ' | cut -c1-6000; echo
-          bash scripts/sim-quiet.sh "$SIM_UDID"; stamp "quieted (one shell)"
-          watch 6
-          D=~/Library/Developer/CoreSimulator/Devices/$SIM_UDID/data
-          echo "=== where launchd keeps 'disabled':"; grep -rla "amsengagementd" "$D/private/var/db" "$D/Library" 2>/dev/null | head -5
-          for f in $(grep -rla "amsengagementd" "$D/private/var/db" 2>/dev/null | head -2); do echo "--- $f"; plutil -p "$f" 2>/dev/null | head -8; done
-          xcrun simctl shutdown "$SIM_UDID"; sleep 3
-          echo "=== reboot with those services disabled from the start"
-          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "bootstatus returned"
-          watch 6
+          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "first boot"
+          bash scripts/sim-quiet.sh "$SIM_UDID"; stamp "quieted"
+          for i in $(seq 1 40); do L=$(sysctl -n vm.loadavg | awk '{print $2}'); [ "${L%.*}" -lt 15 ] && break; sleep 10; done; stamp "settled (load $L)"
+          bash scripts/run-e2e.sh > /tmp/e2e.log 2>&1; stamp "warm-up e2e exit $?"
+          xcrun simctl shutdown all; sleep 3
+          du -sh ~/Library/Developer/CoreSimulator/Devices
+      - uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Developer/CoreSimulator/Devices
+          key: sim-settled-${{ github.run_id }}
+
+  use-image:
+    needs: make-image
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Restore settled Simulator
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Developer/CoreSimulator/Devices
+          key: sim-settled-${{ github.run_id }}
+      - name: Restart CoreSimulator
+        run: sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null; xcrun simctl list devices | grep -c Shutdown
+      - uses: ./.github/actions/mac-setup
+        with: { scheme: CloudSim }
+      - name: Boot + e2e on the settled Simulator
+        run: |
+          set +e
+          stamp() { echo "$(( $(date +%s) - T0 ))s  $1"; }
+          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "boot (settled)"
+          for i in 1 2 3 4 5 6; do echo "load $(sysctl -n vm.loadavg | awk '{print $2}')"; sleep 5; done
           T0=$(date +%s); bash scripts/run-e2e.sh > /tmp/e2e.log 2>&1; stamp "e2e exit $?"
-          grep -E "Test Case.*(passed|failed)" /tmp/e2e.log | head -2
+          grep -E "Test Case.*(passed|failed)" /tmp/e2e.log
           grep -E "Running tests|All tests' started" out/xcodebuild-test.log | head -2
-          echo "TOTAL job-work: $(( $(date +%s) - TJ ))s"
+          grep -E "^\s+t = +[0-9.]+s (Open|Waiting 20)" out/xcodebuild-test.log | head -3
