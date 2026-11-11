@@ -87,7 +87,7 @@ A demo is a short film of the change for people reviewing the PR. CI records `De
 4. **Type a message in one `type(...)` call.** It appears letter by letter, and `compose.py` re-times the keystrokes to about 11 a second. Typing word by word made words pop in whole, with stalls between them.
 5. **Tap only what the viewer should see tapped**, each once, in a sensible order. No warm-up taps (tapping "1m" then "10s" read as a mistake). Every `tap(...)` draws a touch circle.
 6. **`pause()` is the only pacing.** Everything else XCUITest does (finding elements, waiting for the app to idle, slow typing) leaves the screen still, and `compose.py` trims any still stretch outside a `pause()` to a quarter second. So after every visible result, `pause()` long enough to see it (1–3 s). Never count on XCUITest's slowness for pacing.
-7. **Real waits get `fastForward(from:factor:)`** (a countdown plays 4× so it's visible but short).
+7. **Real waits get `fastForward(from:factor:)`**: the 10 s countdown plays at 8×, about a second. At 4× it still read as dead air.
 8. **Anything that isn't the app gets `cut(from:)`**: relaunching shows the home screen and a white launch screen. A cut drops it, with a quick dip on each side.
 9. **Aim for 45–75 s.** `review.py` flags anything over 90 s.
 
@@ -100,7 +100,7 @@ CI runs `demo/review.py` after composing and posts its findings in the PR commen
 4. Fix all of it in one go: the walkthrough (needs a Mac run), or the board and timing (iterate in Linux on `source/`, below).
 
 What `review.py` checks, against `demo.report.json` (what `compose.py` placed where) and the pixels:
-- **sync**: every touch circle sits on a visible response near the tapped element
+- **sync**: every touch circle sits on a response concentrated on the tapped element (a whole-screen change like an app launch doesn't count; counting it hid an out-of-sync video)
 - **dead air**: no still stretch over 2 s outside a `pause()`, and none over 5 s at all
 - **typing**: 5–30 characters a second, no stall over 0.6 s
 - **flashes**: nothing pops on screen and away within a second, like a home screen or launch screen
@@ -111,7 +111,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 
 | Flaw | Cause | Fix |
 |---|---|---|
-| Captions, touch circles and fast-forwards about 12 s late | The recording's first frame came ~12 s after simctl printed "Recording started" (an idle Simulator sends no frames), so `recordingStart` was wrong | `compose.py` syncs on its own: it matches each tap and typing call to on-screen changes near that element and prints the offset (`sync: the recording runs -12.2s ...`). Touch circles land on the first change near the element |
+| Captions, touch circles and fast-forwards 12 s late (35 s on the next run) | The recording's first frame came ~12 s after simctl printed "Recording started" (an idle Simulator sends no frames), so `recordingStart` was wrong | `compose.py` syncs on its own: it matches each tap and typing call to on-screen changes near that element and prints the offset (`sync: the recording runs -26.2s ...`). Only changes concentrated on the element count: the first version also counted the app launch, which changes everything, and locked onto a wrong offset. Touch circles land on the first such change |
 | Touch circles on nothing ("unintentional presses") | Same offset | Same |
 | Typing took 25 s for one sentence, word by word with ~3 s stalls | One `typeText` per word; each call costs ~3 s on a busy Simulator | One `type()` per message; keystrokes re-timed to ~11 a second |
 | 14 s with nothing moving before a seal, and more gaps like it | XCUITest finding elements (~5 s per tap on a busy Simulator) | Still stretches outside `pause()` trimmed to 0.25 s |

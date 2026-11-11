@@ -48,7 +48,7 @@ final class DemoWalkthrough: XCTestCase {
         XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10))
         pause(3.0)
 
-        // 3. A note for ten seconds: watch it count down (fast-forwarded), then break the seal.
+        // 3. A note for ten seconds: watch it count down (8x), then break the seal.
         chapter(title: "When time is up, break the seal.",
                 sub: "This one opens in ten seconds. Only then does the server hand it over.",
                 chip: "GET /capsules/:id  \u{2192}  200 OK")
@@ -66,7 +66,7 @@ final class DemoWalkthrough: XCTestCase {
         let waitStart = Date()
         let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: fresh)
         wait(for: [ready], timeout: 30)
-        fastForward(from: waitStart, factor: 4)
+        fastForward(from: waitStart, factor: 8)
         pause(1.0)
         tap(fresh)
         XCTAssertTrue(app.staticTexts["revealedMessage"].waitForExistence(timeout: 10))

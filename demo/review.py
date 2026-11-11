@@ -87,11 +87,12 @@ def check(video, rep):
     flags, notes = [], []
 
     # sync: a tap circle needs a response near the element, from just before it to shortly after
+    # (A change of the whole screen, like an app launching, doesn't count: it would hide a video that's out of sync.)
     for r in rep["ripples"]:
-        ser = region(changed, r)
+        ser = region(changed, r) - 1.5 * moving
         k0, k1 = max(0, K(r["t"] - 0.4)), min(len(ser), K(r["t"] + 0.9))
         if k1 <= k0 or ser[k0:k1].max() < 0.01:
-            flags.append(f"sync: tap circle at {r['t']:.1f}s with no visible response near it")
+            flags.append(f"sync: tap circle at {r['t']:.1f}s with no response on the tapped element")
     notes.append(f"sync: {len(rep['ripples'])} tap circles checked; offset {rep['offset']:+.1f}s (confidence {rep['syncConfidence']:.2f})")
 
     # dead air
@@ -129,7 +130,7 @@ def check(video, rep):
         ser = region(changed, tp, grow=0.02)
         ks = [k for k in range(K(a), min(len(ser), K(b) + 1)) if ser[k] > 0.004]
         if not ks:
-            flags.append(f"typing: nothing visible typed at {a:.1f}-{b:.1f}s")
+            flags.append(f"typing: nothing visible typed at {a:.1f}-{b:.1f}s (if several, the video is probably out of sync)")
             continue
         span = max(T(ks[-1] - ks[0]), 0.1)
         rate = tp["chars"] / span

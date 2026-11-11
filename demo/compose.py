@@ -323,7 +323,7 @@ def region_series(changed, ev, grow=0.06):
     return sub.reshape(len(changed), -1).mean(axis=1) if sub.size else np.zeros(len(changed))
 
 
-def find_offset(changed, actions, s0, lo=-45.0, hi=15.0):
+def find_offset(changed, actions, s0, lo=-90.0, hi=15.0):
     """How far the recording's clock is from the markers' clock. Each action (a tap or a typed word) must change
     the screen near its element while it runs; slide the actions along the recording and keep the offset where
     the most of them line up with a change in the right place. Returns (offset, confidence)."""
@@ -331,7 +331,10 @@ def find_offset(changed, actions, s0, lo=-45.0, hi=15.0):
     if len(actions) < 3:
         return 0.0, 0.0
     n = len(changed)
-    series = [(region_series(changed, a), a["_a"], a["_b"]) for a in actions]
+    whole = changed.reshape(n, -1).mean(axis=1)
+    # A hit is a change concentrated on the element: an app launch or a sheet changes the whole screen at once and
+    # would otherwise "match" every action.
+    series = [(np.clip(region_series(changed, a) - 1.5 * whole, 0, None), a["_a"], a["_b"]) for a in actions]
     offs = np.arange(lo, hi + 1e-9, 0.1)
     score = np.zeros(len(offs))
     for j, d in enumerate(offs):
@@ -434,7 +437,7 @@ def main():
     nominal_end = (ends[-1]["t"] if ends else evs[-1]["t"] + 3) - t0
 
     # 1. Look at the recording: what changes when.
-    s0 = max(0.0, nominal_start - 45)
+    s0 = max(0.0, nominal_start - 90)
     frames = load_frames(args.recording, s0, nominal_end - s0 + 20)
     changed = change_maps(frames)
     import numpy as np
@@ -544,7 +547,7 @@ def main():
             continue
         r = R(e["t"])
         if "x" in e and "pre" in e:
-            ser = region_series(changed, e, grow=0.02)
+            ser = region_series(changed, e, grow=0.02) - 1.5 * moving  # a change on the element, not the whole screen
             k0, k1 = max(0, K(R(e["pre"]))), min(len(ser), K(R(e["t"] + 0.15)) + 1)
             hit = [k for k in range(k0, k1) if ser[k] > 0.01]
             if hit:
