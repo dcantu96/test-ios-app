@@ -176,6 +176,13 @@ class DemoCase: XCTestCase {
     /// by word took ~3 s a word with stalls.)
     @MainActor
     func type(_ text: String, into element: XCUIElement) {
+        // A tap doesn't always leave the field focused when the screen is moving (the reveal sheet grows as the
+        // field is tapped). Tap again until it has the keyboard; typing into an unfocused field fails the run.
+        for _ in 0..<4 where !hasFocus(element) {
+            element.tap()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        XCTAssertTrue(hasFocus(element), "\(element) never got keyboard focus")
         var e = box(element.frame)
         let start = now()
         for letter in text {
@@ -186,6 +193,11 @@ class DemoCase: XCTestCase {
         e["until"] = now()
         e["chars"] = text.count
         events.append(e)
+    }
+
+    @MainActor
+    private func hasFocus(_ element: XCUIElement) -> Bool {
+        (element.value(forKey: "hasKeyboardFocus") as? Bool) ?? false
     }
 
     /// The element's centre and size as a share of the screen.

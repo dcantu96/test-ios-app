@@ -45,7 +45,9 @@ final class TimeCapsuleUITests: XCTestCase {
         snap("3 Server refused to open the year-long capsule") // first: the banner only shows for 4 s
         XCTAssertFalse(rowShowing(letter).exists, "a refused capsule must not show its message")
 
-        // 4. Knock again: the server counts it, and the sealed row says so.
+        // 4. Knock again: the server counts it, and the sealed row says so. Wait for the first banner to go first:
+        //    when it hides, the list moves up, and a tap aimed while it moves misses the row (PR #4, 3-CPU runner).
+        XCTAssertTrue(lockedBanner("Knock #1").waitForNonExistence(timeout: 15), "the first banner never went away")
         yearLong.tap()
         XCTAssertTrue(lockedBanner("Knock #2").waitForExistence(timeout: 10), "the second knock wasn't counted")
         XCTAssertTrue(rowShowing("Knocked 2 times").waitForExistence(timeout: 10), "the sealed row doesn't show the knocks")

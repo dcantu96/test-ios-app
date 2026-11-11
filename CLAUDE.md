@@ -28,6 +28,7 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
    - Never race the clock. If something must not have happened yet, set it up so it *can't* happen during the test (the "too early" check uses a capsule sealed for a year).
    - Start any wait first and do other checks while it runs (the 10-second capsule is sealed first).
    - Every wait is `waitForExistence` or an expectation with a timeout, never a fixed `sleep` (the one `sleep(1)` is only for a screenshot of a finished animation).
+   - Never tap while the screen is moving. When the 4 s locked banner hides, the list shifts up, and a tap aimed during the shift misses (PR #4: the second knock never landed). Wait for the banner to go (`waitForNonExistence`) before the next tap.
    - Something on screen only briefly (the 4 s locked banner): wait for it with its text in one predicate query (`lockedBanner("Knock #2")`), and `snap` right after, before any other query. On a busy Simulator each query can take seconds; an exists-then-read-label check, or a screenshot after one more query, missed the banner.
 4. **Write the Swift.** Keep identifiers (`accessibilityIdentifier`) on everything a test touches. You can't compile Swift here, so read your code twice: check Swift 6 concurrency (`@MainActor`), optionals and API names. A compile error costs a whole CI round (about 5 minutes).
 5. **Rewrite the demo scene for this change** if it's visible: go through "Before writing demo steps" (under "Demo videos") first, then replace `DemoTests/DemoWalkthrough.swift` with a scene that shows only this PR's change. Don't add to the previous PR's scene. To change captions or the board, iterate in Linux on the previous run's `source/` (see "Demo videos").
@@ -142,6 +143,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 | The 10 s capsule unlocked off camera while the next note was typed | Story order copied from the e2e test | Letter first, then the 10 s note with its countdown on screen |
 | A headline ending on one word ("…when it / opens.") | Greedy line wrapping | Balanced wrapping: same line count, even lengths |
 | Star trails across the captions, reading as strikethroughs | Random trails anywhere in the sky | Trails kept out of the caption column |
+| Demo failed: "Neither element nor any descendant has keyboard focus" (PR #4) | Tapping the reply field grows the sheet; on the 3-CPU runner the focus didn't stick | `DemoKit.type()` re-taps until the field has the keyboard |
 | Message clipped at the start of the field | Message longer than the field | Shorter messages (checklist 3) |
 | Every demo replayed the whole app (PR #4: 68 s, five chapters of old features before the new one) | Each PR appended a chapter to one ever-growing walkthrough | The scene is rewritten per PR and shows only the change; earlier state is seeded through the API off camera (checklist 0). PR #4's demo went from 68 s to about 30 s |
 
