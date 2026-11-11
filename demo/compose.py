@@ -20,7 +20,6 @@ markers.json:
     {"t": <epoch>, "kind": "hold", "until": <epoch>},               # a deliberate pause: never trimmed
     {"t": <epoch>, "kind": "speed", "until": <epoch>, "factor": 4},  # fast-forward this stretch
     {"t": <epoch>, "kind": "cut", "until": <epoch>},                # drop this stretch (a quick dip hides the join)
-    {"t": <epoch>, "kind": "shot", "until": <epoch>, "name": "sync-01"},  # a screenshot taken in [t, until]: shots/sync-01.png
     {"t": <epoch>, "kind": "end"}
   ],
   "synced": true                       # optional: recordingStart is exact, skip the automatic sync
@@ -28,10 +27,10 @@ markers.json:
 
 What it fixes on its own (see "Demo videos" in CLAUDE.md for why):
 - Sync. The recording's first frame can come many seconds after simctl says "Recording started" (an idle
-  Simulator sends no frames), so `recordingStart` alone put captions and ripples 12-35 s late. The script
-  finds the offset by lining the recording up against screenshots the walkthrough took at known times
-  (shots/), and prints it. Without screenshots it matches taps and typing to changes on their elements,
-  which is weaker: home-screen widgets and app launches can fool it.
+  Simulator sends no frames), so `recordingStart` alone put captions and ripples 9-35 s off. The script
+  finds the offset from the taps and typing: at the right offset each one changes the screen on its own
+  element, and the screen is still just before it (XCUITest waits for the app to go quiet before acting;
+  home-screen widgets and app launches don't). Checked on four real recordings.
 - Dead air. XCUITest spends seconds finding each element and typing each word on a busy Simulator. Stretches
   where the screen doesn't change, outside "hold" (a deliberate pause), "speed" and "cut", are trimmed to
   a quarter second. Each chapter keeps enough time to read its caption.
@@ -326,10 +325,10 @@ def region_series(changed, ev, grow=0.06):
     return sub.reshape(len(changed), -1).mean(axis=1) if sub.size else np.zeros(len(changed))
 
 
-def find_offset(changed, actions, s0, lo=-90.0, hi=15.0):
-    """How far the recording's clock is from the markers' clock. Each action (a tap or a typed word) must change
-    the screen near its element while it runs; slide the actions along the recording and keep the offset where
-    the most of them line up with a change in the right place. Returns (offset, confidence)."""
+def find_offset(changed, actions, s0, lo=-90.0, hi=40.0):
+    """How far the recording's clock is from the markers' clock. Each action (a tap or a typing call) must change
+    the screen on its element while it runs, and the screen must be still just before it; slide the actions along
+    the recording and keep the offset where they fit best. Returns (offset, confidence)."""
     import numpy as np
     if len(actions) < 3:
         return 0.0, 0.0
@@ -347,66 +346,17 @@ def find_offset(changed, actions, s0, lo=-90.0, hi=15.0):
             k0, k1 = max(0, k0), min(n, k1)
             if k1 > k0:
                 tot += min(1.0, float(ser[k0:k1].max()) * 20)
+            # XCUITest waits for the app to go quiet before it acts, so the screen is still just before each
+            # action. A home screen with live widgets or an app launching is not: that's a wrong offset.
+            q0, q1 = max(0, k0 - int(1.2 * AN_FPS)), min(n, max(0, k0 - 1))
+            if q1 > q0:
+                tot -= min(1.0, float(whole[q0:q1].mean()) / 0.01)
         score[j] = tot
     top = [j for j in range(len(offs)) if score[j] >= score.max() - 1e-6]
     best = top[len(top) // 2]  # the middle of the best plateau
     far = [score[j] for j in range(len(offs)) if abs(offs[j] - offs[best]) > 1.5]
     runner = max(far) if far else 0.0
     return float(offs[best]), float((score[best] - runner) / max(score[best], 1e-6))
-
-
-def find_offset_shots(frames, shots, s0, lo=-120.0, hi=30.0):  # -> ((lo, hi), confidence)
-    """Line the recording up against screenshots the walkthrough took at known times (during pauses, so the
-    screen is still). At the right offset every screenshot matches the frame shown at its time; at a wrong one
-    some of them show another screen. shots: [(t0, t1, image array AN_H x AN_W)] in recording time without
-    offset; the screenshot was taken somewhere in [t0, t1]. Returns (offset, confidence)."""
-    import numpy as np
-    n = len(frames)
-    if len(shots) < 3 or n < 2:
-        return (0.0, 0.0), 0.0, 1.0
-    f = frames.reshape(n, -1).astype(np.int16)
-    # Distance = share of pixels that clearly differ, so a small difference (text in a field, one more row)
-    # counts as much as it should and video noise doesn't count at all.
-    dists = [((np.abs(f - img.reshape(1, -1).astype(np.int16)) > 24).mean(axis=1), t0, t1) for t0, t1, img in shots]
-    offs = np.arange(lo, hi + 1e-9, 0.1)
-    score = np.full(len(offs), np.inf)
-    for j, d in enumerate(offs):
-        tot, used = 0.0, 0
-        for dist, t0, t1 in dists:
-            k0, k1 = int(math.floor((t0 + d - s0 - 0.2) * AN_FPS)), int(math.ceil((t1 + d - s0 + 0.2) * AN_FPS)) + 1
-            k0, k1 = max(0, k0), min(n, k1)
-            tot += float(dist[k0:k1].min()) if k1 > k0 else 1.0
-            used += 1
-        score[j] = tot / max(used, 1)
-    best = int(score.argmin())
-    # Screenshots of a still screen match anywhere in that still stretch, so they pin a range, not a point:
-    # every offset that matches about as well as the best one.
-    tol = 0.0015
-    ok = [j for j in range(len(offs)) if score[j] <= score[best] + tol]
-    lo_j = hi_j = best
-    while lo_j - 1 in ok:
-        lo_j -= 1
-    while hi_j + 1 in ok:
-        hi_j += 1
-    far = [score[j] for j in range(len(offs)) if offs[j] < offs[lo_j] - 1.5 or offs[j] > offs[hi_j] + 1.5]
-    runner = min(far) if far else score[best]
-    return (float(offs[lo_j]), float(offs[hi_j])), float((runner - score[best]) / max(runner, 1e-6)), float(score[best])
-
-
-def load_shots(evs, shots_dir, t0):
-    """The walkthrough's sync screenshots, scaled like the analysis frames: [(t0, t1, array)]."""
-    import numpy as np
-    out = []
-    if not shots_dir or not os.path.isdir(shots_dir):
-        return out
-    for e in evs:
-        if e["kind"] != "shot":
-            continue
-        p = os.path.join(shots_dir, e["name"] + ".png")
-        if os.path.exists(p):
-            img = Image.open(p).convert("L").resize((AN_W, AN_H), Image.BOX)
-            out.append((e["t"] - t0, e.get("until", e["t"]) - t0, np.asarray(img, dtype=np.uint8)))
-    return out
 
 
 def subtract(iv, cuts):
@@ -481,7 +431,6 @@ def main():
     ap.add_argument("--save-source", help="also write the synced, trimmed-to-length screen recording (source.mp4) and its "
                                           "markers.json to this folder, to iterate on the board in Linux later")
     ap.add_argument("--no-trim", action="store_true", help="don't trim dead air")
-    ap.add_argument("--shots", help="folder of the walkthrough's sync screenshots (default: shots/ next to the markers)")
     args = ap.parse_args()
 
     M = json.load(open(args.markers))
@@ -495,7 +444,7 @@ def main():
     nominal_end = (ends[-1]["t"] if ends else evs[-1]["t"] + 3) - t0
 
     # 1. Look at the recording: what changes when.
-    s0 = max(0.0, nominal_start - 90)
+    s0 = max(0.0, nominal_start - 90)  # the offset search covers -90..+40 s
     frames = load_frames(args.recording, s0, nominal_end - s0 + 20)
     changed = change_maps(frames)
     import numpy as np
@@ -508,22 +457,11 @@ def main():
             actions.append(dict(e, _a=e.get("pre", e["t"] - 2.5) - t0, _b=e["t"] + 0.15 - t0))
         elif e["kind"] == "type" and "x" in e:
             actions.append(dict(e, _a=e["t"] - t0, _b=e["until"] + 0.15 - t0))
-    shots = load_shots(evs, args.shots or os.path.join(os.path.dirname(os.path.abspath(args.markers)), "shots"), t0)
     if M.get("synced"):
         offset, conf, how = 0.0, 1.0, "markers already synced"
-    elif len(shots) >= 3:
-        # Screenshots find the right stretch of the recording (an app launch or animated home-screen widgets can't
-        # fool them); taps and typing then pin the exact moment inside it.
-        (lo, hi), conf, miss = find_offset_shots(frames, shots, s0)
-        if miss > 0.08:  # even the best alignment leaves the screenshots looking unlike the video
-            offset, conf = find_offset(changed, actions, s0)
-            how = f"taps and typing (screenshots didn't match the video: {miss:.0%} of pixels off at best)"
-        else:
-            offset, _ = find_offset(changed, actions, s0, lo=lo - 0.3, hi=hi + 0.3) if len(actions) >= 3 else ((lo + hi) / 2, 0)
-            how = f"{len(shots)} screenshots ({lo:+.1f}..{hi:+.1f}s, {miss:.1%} of pixels off), then taps and typing"
     else:
         offset, conf = find_offset(changed, actions, s0)
-        how = f"{len(actions)} taps and typing (no screenshots)"
+        how = f"{len(actions)} taps and typing"
     if conf < 0.08 and not M.get("synced"):
         print(f"sync: no clear match by {how} (best {offset:+.1f}s, confidence {conf:.2f}); using recordingStart as is")
         offset = 0.0
@@ -554,7 +492,7 @@ def main():
         rs = [s0 + k / AN_FPS for k in keys]
         step = (e["chars"] / TYPE_RATE) / (len(rs) - 1)
         for r0, r1 in zip(rs, rs[1:]):
-            explicit.append((r0, r1, max(0.25, min(8.0, (r1 - r0) / step)), False))
+            explicit.append((r0, r1, max(0.12, min(8.0, (r1 - r0) / step)), False))  # XCUITest can type 30+ a second
     explicit.sort()
     clean = []
     for a, b, f, dip in explicit:  # no overlaps

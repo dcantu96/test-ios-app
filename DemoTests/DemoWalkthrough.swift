@@ -11,7 +11,6 @@ import XCTest
 final class DemoWalkthrough: XCTestCase {
     private var app: XCUIApplication!
     private var events: [[String: Any]] = []
-    private var shots = 0
     private let letter = "Open this next year."
     private let note = "Dear future me: you made it."
 
@@ -107,28 +106,10 @@ final class DemoWalkthrough: XCTestCase {
     private func now() -> Double { Date().timeIntervalSince1970 }
 
     /// The only thing that sets the pace: a deliberate hold, kept as is in the video.
-    /// Longer holds also save a screenshot with its time: compose.py lines the recording up against these (the
-    /// recording's own start time can be off by half a minute).
-    @MainActor
     private func pause(_ seconds: Double) {
-        if seconds >= 0.6 { syncShot() }
         let start = now()
         Thread.sleep(forTimeInterval: seconds)
         events.append(["t": start, "kind": "hold", "until": now()])
-    }
-
-    @MainActor
-    private func syncShot() {
-        shots += 1
-        let name = String(format: "sync-%02d", shots)
-        let before = now()
-        let shot = XCUIScreen.main.screenshot()
-        let after = now()
-        let attachment = XCTAttachment(screenshot: shot)
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        events.append(["t": before, "kind": "shot", "until": after, "name": name])
     }
 
     /// On a busy Simulator the screen lags the app by seconds: XCUITest finds the app's elements while the screen
