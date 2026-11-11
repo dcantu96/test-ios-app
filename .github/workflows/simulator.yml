@@ -1,0 +1,31 @@
+name: Run in iOS Simulator
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: simulator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build, boot, launch, capture
+        run: bash scripts/run-in-simulator.sh
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-output
+          path: out/
+          if-no-files-found: warn
