@@ -18,10 +18,14 @@ echo "::endgroup::"
 echo "::group::Pick newest iOS runtime and an iPhone"
 xcrun simctl list runtimes -j > "$OUT/runtimes.json"
 RUNTIME_ID="$(python3 - "$OUT/runtimes.json" "$OUT/runtime.txt" <<'PY'
-import json, sys
+import json, re, sys
 rts = [r for r in json.load(open(sys.argv[1]))["runtimes"]
        if r.get("isAvailable") and r.get("platform", r["name"].split()[0]) == "iOS"]
-rts.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
+# Prefer general runtimes (…SimRuntime.iOS-27-2) over device-specific ones
+# (…SimRuntime.iOS-27-2-iPhone19-4), which only run a single new device model.
+general = re.compile(r"\.iOS-\d+(-\d+)*$")
+rts.sort(key=lambda r: (bool(general.search(r["identifier"])),
+                        [int(x) for x in r["version"].split(".")]))
 label = lambda r: "%s (%s)" % (r["name"], r.get("buildversion", ""))
 for r in rts:
     print("Available runtime: " + label(r), file=sys.stderr)
@@ -81,12 +85,25 @@ echo "::endgroup::"
 
 echo "::group::Install, launch, capture"
 xcrun simctl install "$UDID" "$APP"
-xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/run.mp4" &
+
+# Devices with more than one screen make simctl io ask which display to use.
+# Probe once and pick the primary display if that happens.
+DISPLAY_ARGS=()
+PROBE="$(xcrun simctl io "$UDID" screenshot "$OUT/.probe.png" 2>&1 || true)"
+rm -f "$OUT/.probe.png"
+if grep -q -- "--display=" <<<"$PROBE"; then
+  DISPLAY_ID="$(grep -E -- '--display=[0-9]+ .*\(primary\)' <<<"$PROBE" | sed -E 's/.*--display=([0-9]+).*/\1/' | head -1)"
+  [ -n "$DISPLAY_ID" ] || DISPLAY_ID="$(grep -oE -- '--display=[0-9]+' <<<"$PROBE" | head -1 | cut -d= -f2)"
+  DISPLAY_ARGS=(--display="$DISPLAY_ID")
+  echo "Multiple displays; using display $DISPLAY_ID"
+fi
+
+xcrun simctl io "$UDID" recordVideo "${DISPLAY_ARGS[@]}" --codec=h264 --force "$OUT/run.mp4" &
 REC_PID=$!
 sleep 2
 xcrun simctl launch "$UDID" "$BUNDLE_ID"
 sleep 6
-xcrun simctl io "$UDID" screenshot "$OUT/screenshot.png"
+xcrun simctl io "$UDID" screenshot "${DISPLAY_ARGS[@]}" "$OUT/screenshot.png"
 sleep 2
 kill -INT "$REC_PID" || true
 wait "$REC_PID" || true
