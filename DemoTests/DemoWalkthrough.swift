@@ -98,18 +98,14 @@ final class DemoWalkthrough: XCTestCase {
         XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 10))
         pause(2.8)
 
-        // 6. Quit and reopen. The home screen and launch screen in between are cut out.
-        chapter(title: "Still there after a relaunch.", sub: "Quit, reopen: all three come back from Postgres, knocks and all.")
-        pause(1.0)
-        let relaunchStart = Date()
-        app.terminate()
-        app = launchApp()
-        let opened = app.buttons.matching(NSPredicate(format: "identifier == 'capsuleRow' AND label CONTAINS %@", note)).firstMatch
-        XCTAssertTrue(opened.waitForExistence(timeout: 20))
+        // 6. Pull to refresh: all three come back from Postgres. (Not a relaunch: on the 3-CPU public-repo runner the
+        //    recording stopped updating after the app quit, and showed the home screen to the end. The e2e test
+        //    proves capsules survive a relaunch; the demo shows the same data reloading, on camera.)
+        chapter(title: "Straight from Postgres.", sub: "Pull to refresh: all three come back, knocks and all.")
+        pause(1.2)
+        app.scrollViews.firstMatch.swipeDown(velocity: .slow)
         XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 3))
-        waitUntilDrawn()
-        cut(from: relaunchStart)
-        pause(4.2)
+        pause(3.6)
 
         chapter(style: "end", title: "Time Capsule", sub: "SwiftUI app, Node API, Postgres. Recorded on a cloud Mac.")
         pause(4.0)

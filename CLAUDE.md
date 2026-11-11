@@ -90,7 +90,7 @@ A demo is a short film of the change for people reviewing the PR. CI records `De
 5. **Tap only what the viewer should see tapped**, each once, in a sensible order. No warm-up taps (tapping "1m" then "10s" read as a mistake). Every `tap(...)` draws a touch circle.
 6. **`pause()` is the only pacing.** Everything else XCUITest does (finding elements, waiting for the app to idle, slow typing) leaves the screen still, and `compose.py` trims any still stretch outside a `pause()` to a quarter second. So after every visible result, `pause()` long enough to see it (1–3 s). Never count on XCUITest's slowness for pacing.
 7. **Real waits get `fastForward(from:factor:)`**: the 10 s countdown plays at 8×, about a second. At 4× it still read as dead air.
-8. **Anything that isn't the app gets `cut(from:)`**: relaunching shows the home screen and a white launch screen. A cut drops it, with a quick dip on each side.
+8. **Don't leave the app on camera.** No `terminate()`/`launch()` in the walkthrough: on the 3-CPU public-repo runner the recording stopped updating once the app quit and showed the home screen to the end (PR #4), even though the test saw the app back. Show persistence with pull-to-refresh instead; the e2e test proves the relaunch. If something outside the app is ever unavoidable, wrap it in `cut(from:)` and check the sheets after it.
 9. **Wait for the app to be visible, not just present: `waitUntilDrawn()`** after every launch, before the first caption and before ending a cut. On a busy Simulator the screen lags the app by seconds: XCUITest found the text field while the screen still showed the home screen, then a white launch screen, for 6 s of the title card.
 10. **Aim for 45–75 s.** `review.py` flags anything over 90 s.
 
@@ -108,6 +108,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 - **typing**: 5–30 characters a second, no stall over 0.6 s
 - **flashes**: nothing pops on screen and away within a second, like a home screen or launch screen
 - **blank**: no flat one-color screen (a launch screen) outside the dip at a cut
+- **not the app**: the phone shows the app or its sheets, never the home screen (app: saturation 0.40–0.65, sheets: 40–85% white; home screen: 0.24 and 4%)
 - **captions**: up long enough to read
 - **length**: under 90 s
 
@@ -126,6 +127,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 | First message typed at 4 a second (PR #3), the second at 11 | Early in the run the Simulator is busiest and a letter took over a second; the re-timing only sped gaps up to 8× | Gaps between letters may be sped up to 40× (only the cursor blinks there) |
 | 14 s with nothing moving before a seal, and more gaps like it | XCUITest finding elements (~5 s per tap on a busy Simulator) | Still stretches outside `pause()` trimmed to 0.25 s |
 | Home screen, then a white screen, during the relaunch | `app.terminate()` and `launch()` on camera | `cut(from:)` around the relaunch |
+| The last 8 s showed the home screen, and every automatic check passed (PR #4) | On the 3-CPU runner the recording stopped updating after the app quit; the test's own screenshots saw the app back. Nothing checked *what* the phone showed | No relaunch on camera (pull-to-refresh instead), and `review.py` checks the phone shows the app. Found only by reading the contact sheets: read them every time |
 | Home screen, then a white launch screen, under the title card (6 s) | The screen lags the app: XCUITest saw the field long before it was drawn | `waitUntilDrawn()` (screenshots until the app's colors show), and `review.py` flags blank screens |
 | The 10 s capsule unlocked off camera while the next note was typed | Story order copied from the e2e test | Letter first, then the 10 s note with its countdown on screen |
 | A headline ending on one word ("…when it / opens.") | Greedy line wrapping | Balanced wrapping: same line count, even lengths |
