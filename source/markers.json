@@ -1,0 +1,133 @@
+{
+ "events": [
+  {
+   "kind": "hold",
+   "t": 1794435838.774739,
+   "until": 1794435839.2787318
+  },
+  {
+   "kicker": "New in this PR",
+   "kind": "chapter",
+   "style": "title",
+   "sub": "Answer a capsule once it opens. Your reply stays sealed as long as the first one did.",
+   "t": 1794435839.283685,
+   "title": "Write back"
+  },
+  {
+   "kind": "hold",
+   "t": 1794435839.283715,
+   "until": 1794435844.0849261
+  },
+  {
+   "chip": "POST /capsules  { replyTo }",
+   "kind": "chapter",
+   "style": "step",
+   "sub": "The reveal now has a place to write back.",
+   "t": 1794435844.08505,
+   "title": "Open it, then answer it."
+  },
+  {
+   "kind": "hold",
+   "t": 1794435844.0850658,
+   "until": 1794435845.0863771
+  },
+  {
+   "h": 0.08466819221967964,
+   "kind": "tap",
+   "pre": 1794435846.5109038,
+   "t": 1794435847.531326,
+   "w": 0.9203980099502488,
+   "x": 0.5,
+   "y": 0.524790236460717
+  },
+  {
+   "kind": "hold",
+   "t": 1794435849.128084,
+   "until": 1794435850.938181
+  },
+  {
+   "h": 0.050356448105871,
+   "kind": "tap",
+   "pre": 1794435852.425274,
+   "t": 1794435860.5205512,
+   "w": 0.5950082807398555,
+   "x": 0.42383894279821593,
+   "y": 0.7727435218933245
+  },
+  {
+   "kind": "hold",
+   "t": 1794435860.6406112,
+   "until": 1794435861.148479
+  },
+  {
+   "chars": 22,
+   "h": 0.05263157894736842,
+   "kind": "type",
+   "t": 1794435863.790317,
+   "until": 1794435885.938189,
+   "w": 0.6218905472636815,
+   "x": 0.42039800995024873,
+   "y": 0.4088482074752097
+  },
+  {
+   "kind": "hold",
+   "t": 1794435885.938222,
+   "until": 1794435886.649081
+  },
+  {
+   "h": 0.05034324942791762,
+   "kind": "tap",
+   "pre": 1794435888.5250769,
+   "t": 1794435890.2159061,
+   "w": 0.13432835820895522,
+   "x": 0.8233830845771144,
+   "y": 0.4088482074752097
+  },
+  {
+   "kind": "hold",
+   "t": 1794435893.280375,
+   "until": 1794435894.0887709
+  },
+  {
+   "kind": "chapter",
+   "style": "step",
+   "sub": "That note waited ten seconds, so the reply opens in ten.",
+   "t": 1794435894.089334,
+   "title": "Sealed as long as the first one waited."
+  },
+  {
+   "kind": "hold",
+   "t": 1794435894.089342,
+   "until": 1794435896.305543
+  },
+  {
+   "factor": 5,
+   "kind": "speed",
+   "t": 1794435896.605685,
+   "until": 1794435900.948307
+  },
+  {
+   "kind": "hold",
+   "t": 1794435901.198347,
+   "until": 1794435903.405009
+  },
+  {
+   "kind": "chapter",
+   "style": "end",
+   "sub": "Time Capsule. SwiftUI app, Node API, Postgres.",
+   "t": 1794435903.4050798,
+   "title": "Write back"
+  },
+  {
+   "kind": "hold",
+   "t": 1794435903.405089,
+   "until": 1794435907.0153751
+  },
+  {
+   "kind": "end",
+   "t": 1794435907.015518
+  }
+ ],
+ "slowmo": 4,
+ "recordingStart": 1794435749.083685
+}
