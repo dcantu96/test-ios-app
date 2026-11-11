@@ -170,13 +170,17 @@ final class DemoWalkthrough: XCTestCase {
         events.append(e)
     }
 
-    /// One typeText call per message, so it appears letter by letter. compose.py re-times the keystrokes it sees
-    /// to a person's pace (XCUITest types in bursts).
+    /// One letter per typeText call, so every letter shows up on its own frame; compose.py then re-times them
+    /// to a person's pace and trims the gaps. (A whole message in one call took ~0.8 s and some runs drew it in
+    /// two or three frames: the letters arrived in clumps that no re-timing can spread out. Word by word took
+    /// ~3 s a word with stalls.)
     @MainActor
     private func type(_ text: String, into element: XCUIElement) {
         var e = box(element.frame)
         let start = now()
-        element.typeText(text)
+        for letter in text {
+            element.typeText(String(letter))
+        }
         e["kind"] = "type"
         e["t"] = start
         e["until"] = now()
