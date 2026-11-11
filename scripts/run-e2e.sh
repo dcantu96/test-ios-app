@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# Pick the newest Xcode and iOS Simulator on this Mac, then run the XCUITest
-# end-to-end suite against the live API, exporting step screenshots to ./out.
+# Run the XCUITest end-to-end suite (UITests/) on the e2e simulator against the live API, from the build that
+# scripts/build.sh made, and export the step screenshots to ./out. Needs UDID_E2E (scripts/sim.sh prepare).
 set -euo pipefail
 
 SCHEME="${SCHEME:-CloudSim}"
 OUT="${OUT:-$PWD/out}"
-source "$(dirname "$0")/sim-setup.sh"
-
-
-echo "::group::Generate project"
-xcodegen generate
-echo "::endgroup::"
+UDID="${UDID_E2E:?run scripts/sim.sh prepare first}"
+mkdir -p "$OUT"
 
 echo "::group::Run end-to-end UI tests"
 rm -rf "$OUT/e2e.xcresult"
 set +e
 API_URL="${API_URL:-http://localhost:8787}" \
 TEST_RUNNER_API_URL="${API_URL:-http://localhost:8787}" \
-xcodebuild test \
-  -project "$SCHEME.xcodeproj" \
+xcodebuild test-without-building \
+  -project CloudSim.xcodeproj \
   -scheme "$SCHEME" \
   -destination "id=$UDID" \
   -derivedDataPath build \

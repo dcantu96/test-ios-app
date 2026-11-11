@@ -103,30 +103,26 @@ final class DemoWalkthrough: XCTestCase {
     }
 
     /// Taps like a finger would, and records where, so the video can show a touch ripple.
+    /// XCUITest spends most of a tap() call finding the element; the touch itself lands at the end of the call,
+    /// so the marker is stamped when tap() returns.
     @MainActor
     private func tap(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10), "can't tap \(element)")
         let f = element.frame, screen = app.windows.firstMatch.frame
-        events.append(["t": now(), "kind": "tap",
+        element.tap()
+        events.append(["t": now() - 0.12, "kind": "tap",
                        "x": (f.midX - screen.minX) / max(screen.width, 1),
                        "y": (f.midY - screen.minY) / max(screen.height, 1)])
-        element.tap()
     }
 
-    /// Types a few letters at a time with small pauses, so it reads like someone typing.
+    /// Types a word at a time. Each typeText call costs XCUITest most of a second, so per-letter typing would
+    /// drag; per-word reads like someone typing and keeps the demo moving.
     @MainActor
     private func type(_ text: String, into element: XCUIElement) {
-        var rng = SystemRandomNumberGenerator()
-        var chunk = ""
-        for ch in text {
-            chunk.append(ch)
-            if chunk.count >= 2 || ch == " " {
-                element.typeText(chunk)
-                chunk = ""
-                pause(Double.random(in: 0.03...0.12, using: &rng))
-            }
+        let words = text.split(separator: " ", omittingEmptySubsequences: false)
+        for (i, word) in words.enumerated() {
+            element.typeText(String(word) + (i < words.count - 1 ? " " : ""))
         }
-        if !chunk.isEmpty { element.typeText(chunk) }
     }
 
     private func fastForward(from start: Date, factor: Double) {

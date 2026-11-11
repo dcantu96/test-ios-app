@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Record the demo walkthrough (DemoTests/) in the newest iOS Simulator against the live API.
+# Record the demo walkthrough (DemoTests/) on the demo simulator against its own API instance (port 8788, its own
+# database, so e2e data never shows up in the video), from the build that scripts/build.sh made.
 # Produces ./out-demo/raw.mp4 (the Simulator's screen) and ./out-demo/markers.json (captions, taps,
 # fast-forwards, and the moment the recording started), which demo/compose.py turns into the MP4.
 # This is a preview, not a test gate: the e2e suite (run-e2e.sh) is what guards main.
@@ -7,15 +8,9 @@ set -euo pipefail
 
 SCHEME="${SCHEME:-CloudSimDemo}"
 OUT="${OUT:-$PWD/out-demo}"
-source "$(dirname "$0")/sim-setup.sh"
-
-echo "::group::Build"
-xcodegen generate
-xcodebuild build-for-testing \
-  -project CloudSim.xcodeproj -scheme "$SCHEME" -destination "id=$UDID" \
-  -derivedDataPath build CODE_SIGNING_ALLOWED=NO > "$OUT/xcodebuild-build.log" 2>&1 \
-  || { tail -60 "$OUT/xcodebuild-build.log"; exit 1; }
-echo "::endgroup::"
+UDID="${UDID_DEMO:?run scripts/sim.sh prepare with DEMO=1 first}"
+API_URL="${DEMO_API_URL:-http://localhost:8788}"
+mkdir -p "$OUT"
 
 echo "::group::Record the walkthrough"
 rm -rf "$OUT/demo.xcresult"
@@ -25,8 +20,7 @@ REC_PID=$!
 for _ in $(seq 1 60); do grep -q "Recording started" "$OUT/record.log" 2>/dev/null && break; sleep 0.25; done
 START="$(python3 -c 'import time; print(time.time())')"
 set +e
-API_URL="${API_URL:-http://localhost:8787}" \
-TEST_RUNNER_API_URL="${API_URL:-http://localhost:8787}" \
+API_URL="$API_URL" TEST_RUNNER_API_URL="$API_URL" \
 xcodebuild test-without-building \
   -project CloudSim.xcodeproj -scheme "$SCHEME" -destination "id=$UDID" \
   -derivedDataPath build -resultBundlePath "$OUT/demo.xcresult" \

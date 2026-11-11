@@ -33,6 +33,8 @@ import tempfile
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# FFMPEG: an ffmpeg with libx264. In CI it's the static build from the imageio-ffmpeg wheel (pip, seconds) rather than apt (half a minute).
+FFMPEG = os.environ.get("FFMPEG") or shutil.which("ffmpeg") or "ffmpeg"
 FONTS = os.path.join(HERE, "fonts")
 
 W, H, FPS = 1920, 1080, 60
@@ -264,9 +266,11 @@ def warp(segs, r):
 
 # ── main ───────────────────────────────────────────────────────────────────────
 
-def run(cmd):
-    print("+", " ".join(cmd[:6]), "…" if len(cmd) > 6 else "", flush=True)
+def run(cmd, label=""):
+    import time
+    t = time.time()
     subprocess.run(cmd, check=True)
+    print(f"  {label or ' '.join(cmd[:4])}: {time.time() - t:.1f}s", flush=True)
 
 
 def main():
@@ -310,39 +314,44 @@ def main():
     if args.footer:
         draw_footer(bg, args.footer)
 
+    # x264 "veryfast" at CRF 16 is visually identical to "slow" on this content (SSIM 0.998) at a fraction of the time.
     enc = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart"]
-    enc += ["-preset", "slow", "-crf", "16"] if args.quality == "high" else ["-preset", "veryfast", "-crf", "22"]
+    preset, crf = os.environ.get("X264_PRESET"), os.environ.get("X264_CRF")
+    enc += ["-preset", preset or ("veryfast" if args.quality == "high" else "ultrafast"), "-crf", crf or ("16" if args.quality == "high" else "23")]
 
-    # 1. The screen. simctl records a variable frame rate with messy decode timestamps, so filters that read
-    #    timestamps (trim, select, fps on the whole file) see the wrong frames. Seeking on the input is
-    #    reliable: take [start, end] that way into a clean constant-rate clip, then cut and fast-forward it.
-    norm = os.path.join(work, "norm.mp4")
-    run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", args.recording, "-t", f"{end - start:.3f}",
-         "-vf", f"fps={FPS},scale={SCREEN_W * 2}:{SCREEN_H * 2}:flags=lanczos,setsar=1",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "8", "-pix_fmt", "yuv420p", norm])
+    # 1. The screen. simctl records a variable frame rate with messy decode timestamps, so filters that read the
+    #    raw timestamps (trim, select) see the wrong frames. Seeking on the input is reliable, and after fps= the
+    #    timestamps are clean: so one pass seeks to `start`, fixes the rate, scales to the phone's screen, then cuts
+    #    and fast-forwards.
     screen = os.path.join(work, "screen.mp4")
-    parts = []
+    parts = [f"[0:v]fps={FPS},scale={SCREEN_W}:{SCREEN_H}:flags=lanczos,setsar=1,split={len(segs)}" + "".join(f"[p{i}]" for i in range(len(segs)))]
     for i, (a, b, f) in enumerate(segs):
-        parts.append(f"[0:v]trim=start={a - start:.3f}:end={b - start:.3f},setpts=(PTS-STARTPTS)/{f}[s{i}]")
-    graph = ";".join(parts) + ";" + "".join(f"[s{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0,fps={FPS},scale={SCREEN_W}:{SCREEN_H}:flags=lanczos,setsar=1[v]"
-    run(["ffmpeg", "-v", "error", "-y", "-i", norm, "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "10", "-pix_fmt", "yuv420p", screen])
+        parts.append(f"[p{i}]trim=start={a - start:.3f}:end={b - start:.3f},setpts=(PTS-STARTPTS)/{f}[s{i}]")
+    graph = ";".join(parts) + ";" + "".join(f"[s{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0,fps={FPS}[v]"
+    run([FFMPEG, "-v", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start + 0.5:.3f}", "-i", args.recording,
+         "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
 
-    # 2. The board: background, masked screen, captions (fade + drift in), tap ripples, footer.
-    inputs = ["-loop", "1", "-framerate", str(FPS), "-t", f"{dur:.3f}", "-i", bg,
-              "-i", screen,
-              "-loop", "1", "-framerate", str(FPS), "-t", f"{dur:.3f}", "-i", mask]
+    # 2. The board: background, masked screen, captions (fade + drift in), tap ripples.
+    #    Every still is decoded once and repeated with the loop filter: "-loop 1" would decode the PNG again for
+    #    every frame. Captions and ripples exist only for their own window (setpts shifts them into place).
+    def still(idx, length, offset=0.0):
+        return f"[{idx}:v]format=rgba,loop=-1:1:0,fps={FPS},trim=duration={length:.3f},setpts=PTS-STARTPTS+{offset:.3f}/TB"
+
+    inputs = ["-i", bg, "-i", screen, "-i", mask]
     n = 3
-    g = [f"[1:v]format=rgba[scr];[2:v]format=gray[msk];[scr][msk]alphamerge[scrm]",
-         f"[0:v][scrm]overlay={SCREEN_X}:{SCREEN_Y}:format=auto[b0]"]
+    g = [f"[0:v]loop=-1:1:0,fps={FPS},trim=duration={dur:.3f}[bgv]",
+         f"[2:v]format=gray,loop=-1:1:0,fps={FPS},trim=duration={dur:.3f}[msk]",
+         f"[1:v]format=rgba[scr];[scr][msk]alphamerge[scrm]",
+         f"[bgv][scrm]overlay={SCREEN_X}:{SCREEN_Y}:format=auto[b0]"]
     last = "b0"
     for i, (p, a, b, ox, oy) in enumerate(caps):
         fin = max(0.0, a - 0.05)
         last_cap = i == len(caps) - 1
         span = (dur - fin) if last_cap else (b - fin)
-        inputs += ["-itsoffset", f"{fin:.3f}", "-loop", "1", "-framerate", str(FPS), "-t", f"{span:.3f}", "-i", p]
+        inputs += ["-i", p]
         fout = fin + max(0.5, span - 0.35)
         out_fade = "" if last_cap else f",fade=t=out:st={fout:.3f}:d=0.35:alpha=1"
-        g.append(f"[{n}:v]format=rgba,fade=t=in:st={fin:.3f}:d=0.5:alpha=1{out_fade}[c{i}]")
+        g.append(still(n, span, fin) + f",fade=t=in:st={fin:.3f}:d=0.5:alpha=1{out_fade}[c{i}]")
         drift = f"{ox}+40*max(0\\,1-(t-{fin:.3f})/0.6)"
         g.append(f"[{last}][c{i}]overlay=x='{drift}':y={oy}:eof_action=pass:repeatlast=0[b{i + 1}]")
         last = f"b{i + 1}"
@@ -353,15 +362,15 @@ def main():
             continue
         cx, cy = SCREEN_X + tp["x"] * SCREEN_W, SCREEN_Y + tp["y"] * SCREEN_H
         st = tt - 0.06
-        inputs += ["-itsoffset", f"{st:.3f}", "-loop", "1", "-framerate", str(FPS), "-t", "0.7", "-i", ripple]
+        inputs += ["-i", ripple]
         sz = f"(60+90*min(1\\,max(0\\,(t-{tt:.3f})/0.55)))"
-        g.append(f"[{n}:v]format=rgba,scale=w='{sz}':h='{sz}':eval=frame,fade=t=in:st={st:.3f}:d=0.06:alpha=1,fade=t=out:st={tt + 0.2:.3f}:d=0.4:alpha=1[r{j}]")
+        g.append(still(n, 0.7, st) + f",scale=w='{sz}':h='{sz}':eval=frame,fade=t=in:st={st:.3f}:d=0.06:alpha=1,fade=t=out:st={tt + 0.2:.3f}:d=0.4:alpha=1[r{j}]")
         g.append(f"[{last}][r{j}]overlay=x='{cx:.1f}-overlay_w/2':y='{cy:.1f}-overlay_h/2':eof_action=pass:repeatlast=0[t{j}]")
         last = f"t{j}"
         n += 1
     g.append(f"[{last}]fade=t=in:st=0:d=0.4,fade=t=out:st={max(0, dur - 0.6):.3f}:d=0.6,format=yuv420p[out]")
     tmp = args.out + ".part.mp4"
-    run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", ";".join(g), "-map", "[out]", "-r", str(FPS), "-t", f"{dur:.3f}", *enc, tmp])
+    run([FFMPEG, "-v", "error", "-y", *inputs, "-filter_complex", ";".join(g), "-map", "[out]", "-r", str(FPS), "-t", f"{dur:.3f}", *enc, tmp], "board + encode")
     os.replace(tmp, args.out)
     if not args.keep:
         shutil.rmtree(work, ignore_errors=True)

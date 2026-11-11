@@ -1,8 +1,12 @@
-name: E2E
+name: CI
 
-# The merge gate. Every PR into main runs the full end-to-end suite (API tests against Postgres, then the
-# XCUITest suite driving the app in the newest iOS Simulator against the live API). Make the "e2e" check
-# required on main so nothing merges without it. No video here: demos are demo.yml's job.
+# One Mac job does all the iOS work, in parallel wherever it can:
+#   - the Simulators start booting first (that's the slowest thing on a fresh runner) while Postgres, the API
+#     tests and one shared build happen;
+#   - then the e2e suite (the merge gate) and, on PRs, the demo walkthrough run at the same time on two
+#     Simulators, each against its own API and database.
+# The demo MP4 is composed afterwards on a cheap Linux runner, so it never holds up the "e2e" check.
+# Make the "e2e" check required on main.
 on:
   pull_request:
     branches: [main]
@@ -10,13 +14,19 @@ on:
     branches: [main]
     paths-ignore: ["**.md", "demo/**", "DemoTests/**"]
   workflow_dispatch:
+    inputs:
+      demo:
+        description: Also record the demo video
+        type: boolean
+        default: true
 
 concurrency:
-  group: e2e-${{ github.head_ref || github.ref }}
+  group: ci-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   e2e:
@@ -27,8 +37,14 @@ jobs:
     env:
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       PUBLISH_BRANCH: e2e-output/${{ github.head_ref || github.ref_name }}
+      DEMO: ${{ (github.event_name == 'pull_request' || inputs.demo) && '1' || '0' }}
+    outputs:
+      demo: ${{ steps.test.outputs.demo }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Start booting the Simulator(s)
+        run: bash scripts/sim.sh prepare
 
       - uses: actions/setup-node@v5
         with:
@@ -39,13 +55,29 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Start Postgres + API (and run API tests)
+      - name: Postgres + API tests + API
         run: bash scripts/start-backend.sh
 
-      - name: Run XCUITest e2e in the Simulator
-        run: bash scripts/run-e2e.sh
+      - name: Build app and UI tests once
+        run: DEMO_SCHEME=$([ "$DEMO" = "1" ] && echo CloudSimDemo) bash scripts/build.sh
 
-      - name: Upload results
+      - name: E2E suite (and the demo walkthrough, in parallel)
+        id: test
+        run: |
+          if [ "$DEMO" = "1" ]; then
+            ( bash scripts/sim.sh wait "$UDID_DEMO" && OUT="$PWD/out-demo" bash scripts/run-demo.sh; echo $? > demo-status ) > demo-run.log 2>&1 &
+            DEMO_PID=$!
+          fi
+          bash scripts/sim.sh wait "$UDID_E2E"
+          set +e; bash scripts/run-e2e.sh; E2E=$?; set -e
+          if [ "$DEMO" = "1" ]; then
+            wait "$DEMO_PID" || true
+            echo "::group::Demo walkthrough"; cat demo-run.log; echo "::endgroup::"
+            if [ "$(cat demo-status 2>/dev/null)" = "0" ] && [ -f out-demo/markers.json ]; then echo "demo=recorded" >> "$GITHUB_OUTPUT"; fi
+          fi
+          exit "$E2E"
+
+      - name: Upload e2e results
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -59,3 +91,83 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/publish-output.sh
+
+      - name: Hand the demo recording to the compose job
+        if: always() && steps.test.outputs.demo == 'recorded'
+        uses: actions/upload-artifact@v5
+        with:
+          name: demo-raw
+          path: |
+            out-demo/raw.mp4
+            out-demo/markers.json
+            out/device.txt
+            out/runtime.txt
+            out/xcode-version.txt
+          retention-days: 1
+
+  demo-video:
+    needs: e2e
+    if: always() && needs.e2e.outputs.demo == 'recorded'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BRANCH: ${{ github.head_ref || github.ref_name }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: demo-raw
+          path: raw
+
+      - name: Install ffmpeg (static, via pip) and Pillow
+        run: python3 -m pip install --quiet imageio-ffmpeg pillow
+
+      - name: Compose the MP4
+        run: |
+          export FFMPEG="$(python3 -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          DEVICE="$(sed -E 's/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//; s/^ +//; s/ +$//' raw/out/device.txt)"
+          RUNTIME="$(sed -E 's/ \(.*//' raw/out/runtime.txt)"
+          XCODE="$(head -1 raw/out/xcode-version.txt)"
+          FOOTER="${PR:+PR #$PR · }$BRANCH · ${HEAD_SHA::7} · $DEVICE, $RUNTIME · $XCODE"
+          python3 demo/compose.py --recording raw/out-demo/raw.mp4 --markers raw/out-demo/markers.json \
+            --out demo.mp4 --footer "$FOOTER" --quality high
+
+      - name: Keep a copy on the run
+        uses: actions/upload-artifact@v5
+        with:
+          name: demo-video
+          path: demo.mp4
+          retention-days: 14
+
+      - name: Publish the preview branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          WORK="$(mktemp -d)"
+          cp demo.mp4 "$WORK/"
+          printf '# Demo preview\n\nFrom `%s` at `%s`. Thrown away when the PR closes.\n\n[demo.mp4](demo.mp4)\n' "$BRANCH" "${HEAD_SHA::7}" > "$WORK/README.md"
+          cd "$WORK"
+          git init -q -b preview
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Demo preview for ${HEAD_SHA::7}"
+          git push -q --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "preview:refs/heads/demo-preview/$BRANCH"
+
+      - name: Post it on the PR
+        if: env.PR != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/raw/demo-preview/${BRANCH}/demo.mp4"
+          SIZE="$(du -h demo.mp4 | cut -f1)"
+          cat > body.md <<EOF
+          ### Demo preview
+          **[Watch demo.mp4](${URL})** (1080p60, ${SIZE}), recorded from \`${HEAD_SHA::7}\` in the iOS Simulator on a cloud Mac, driving the app against the live API and Postgres.
+
+          This is a preview, not a test: the e2e check is what gates the merge. It's re-recorded on every push and deleted when this PR closes.
+          EOF
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md --edit-last --create-if-none \
+            || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
