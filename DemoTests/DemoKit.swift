@@ -114,6 +114,31 @@ class DemoCase: XCTestCase {
         XCTFail("the app never appeared on screen")
     }
 
+    /// Waits for the Mac to calm down before the first caption. A freshly booted Simulator keeps the CPUs busy for
+    /// minutes, and while it does the recording catches only ~10 frames a second, so animations stutter on video
+    /// (PR #4: 10 fps median on the 3-CPU runner; 46 fps when quiet). Waits until the load is below the number of
+    /// CPUs, or has stopped falling for 45 s, at most `maxWait`. Off camera: compose.py starts at the first chapter.
+    func waitForQuiet(maxWait: TimeInterval = 360) {
+        let cpus = Double(ProcessInfo.processInfo.activeProcessorCount)
+        let start = Date()
+        var best = Double.infinity
+        var bestAt = start
+        while Date().timeIntervalSince(start) < maxWait {
+            var load = [Double](repeating: 0, count: 3)
+            getloadavg(&load, 3)
+            let waited = Date().timeIntervalSince(start)
+            print(String(format: "[demo] load %.1f on %.0f CPUs after %.0fs", load[0], cpus, waited))
+            if load[0] < cpus { return }
+            if load[0] < best - 0.2 {
+                best = load[0]
+                bestAt = Date()
+            } else if Date().timeIntervalSince(bestAt) > 45 {
+                return
+            }
+            Thread.sleep(forTimeInterval: 5)
+        }
+    }
+
     /// Mean saturation of a 12x26 thumbnail, 0 (grey) to 1 (vivid).
     private func colorfulness(_ image: UIImage) -> Double {
         guard let cg = image.cgImage else { return 0 }

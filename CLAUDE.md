@@ -102,7 +102,8 @@ The first fast-CI video (PR #2, 102 s) had every flaw in the table below. They w
 6. **`pause()` is the only pacing.** Everything else XCUITest does (finding elements, waiting for the app to idle, slow typing) leaves the screen still, and `compose.py` trims any still stretch outside a `pause()` to a quarter second. So after every visible result, `pause()` long enough to see it (1–3 s). Never count on XCUITest's slowness for pacing.
 7. **Real waits get `fastForward(from:factor:)`**: the 10 s countdown plays at 8×, about a second. At 4× it still read as dead air.
 8. **Don't leave the app on camera.** No `terminate()`/`launch()` in the walkthrough: on the 3-CPU public-repo runner the recording stopped updating once the app quit and showed the home screen to the end (PR #4), even though the test saw the app back. Show persistence with pull-to-refresh instead; the e2e test proves the relaunch. If something outside the app is ever unavoidable, wrap it in `cut(from:)` and check the sheets after it.
-9. **Wait for the app to be visible, not just present: `waitUntilDrawn()`** after every launch, before the first caption and before ending a cut. On a busy Simulator the screen lags the app by seconds: XCUITest found the text field while the screen still showed the home screen, then a white launch screen, for 6 s of the title card.
+9. **Wait for a calm Mac before the first caption: `waitForQuiet()`**, after `waitUntilDrawn()`. A freshly booted Simulator keeps the CPUs busy for minutes, and while it does the recording catches only ~10 frames a second, so animations stutter (PR #4). It waits until the load drops below the CPU count or stops falling, up to 6 minutes, off camera. That makes the demo job slower, but the demo doesn't gate the merge.
+9b. **Wait for the app to be visible, not just present: `waitUntilDrawn()`** after every launch, before the first caption and before ending a cut. On a busy Simulator the screen lags the app by seconds: XCUITest found the text field while the screen still showed the home screen, then a white launch screen, for 6 s of the title card.
 10. **Aim for 20–40 s.** One change rarely needs more. `review.py` flags anything over 60 s, a sign the scene is touring the app.
 
 ### Reviewing the finished video (every time, before calling it done)
@@ -120,6 +121,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 - **flashes**: nothing pops on screen and away within a second, like a home screen or launch screen
 - **blank**: no flat one-color screen (a launch screen) outside the dip at a cut
 - **not the app**: the phone shows the app or its sheets, never the home screen (app: saturation 0.40–0.65, sheets: 40–85% white; home screen: 0.24 and 4%)
+- **smoothness**: animations show at least 24 distinct frames a second (measured outside typing and fast-forwards; PR #4's choppy video had 12, a smooth one 41)
 - **captions**: up long enough to read
 - **length**: under 60 s
 
@@ -144,6 +146,7 @@ What `review.py` checks, against `demo.report.json` (what `compose.py` placed wh
 | A headline ending on one word ("…when it / opens.") | Greedy line wrapping | Balanced wrapping: same line count, even lengths |
 | Star trails across the captions, reading as strikethroughs | Random trails anywhere in the sky | Trails kept out of the caption column |
 | Demo failed: "Neither element nor any descendant has keyboard focus" (PR #4) | Tapping the reply field grows the sheet; on the 3-CPU runner the focus didn't stick | `DemoKit.type()` re-taps until the field has the keyboard |
+| The phone's animations stuttered while the rest of the board was smooth (PR #4) | The Simulator only delivers frames when it gets CPU: on the 3-CPU runner, still busy after boot, the recording caught 10 frames a second in motion (5-CPU runs: ~19; quiet: 40+). Interpolating frames (`minterpolate`) made ghosted double images of sliding sheets | `waitForQuiet()` before the first caption, and `review.py` flags choppy video |
 | Message clipped at the start of the field | Message longer than the field | Shorter messages (checklist 3) |
 | Every demo replayed the whole app (PR #4: 68 s, five chapters of old features before the new one) | Each PR appended a chapter to one ever-growing walkthrough | The scene is rewritten per PR and shows only the change; earlier state is seeded through the API off camera (checklist 0). PR #4's demo went from 68 s to about 30 s |
 
