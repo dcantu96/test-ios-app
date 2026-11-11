@@ -6,30 +6,7 @@ on:
     branches: ["diag/**"]
 
 jobs:
-  make-image:
-    runs-on: xcode-27
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/mac-setup
-        with: { scheme: CloudSim }
-      - name: Boot, quiet, settle, warm up, cache
-        run: |
-          set +e
-          stamp() { echo "$(( $(date +%s) - T0 ))s  $1"; }
-          T0=$(date +%s); xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null; stamp "first boot"
-          bash scripts/sim-quiet.sh "$SIM_UDID"; stamp "quieted"
-          for i in $(seq 1 40); do L=$(sysctl -n vm.loadavg | awk '{print $2}'); [ "${L%.*}" -lt 15 ] && break; sleep 10; done; stamp "settled (load $L)"
-          bash scripts/run-e2e.sh > /tmp/e2e.log 2>&1; stamp "warm-up e2e exit $?"
-          xcrun simctl shutdown all; sleep 3
-          du -sh ~/Library/Developer/CoreSimulator/Devices
-      - uses: actions/cache/save@v4
-        with:
-          path: ~/Library/Developer/CoreSimulator/Devices
-          key: sim-settled-${{ github.run_id }}
-
   use-image:
-    needs: make-image
     runs-on: xcode-27
     timeout-minutes: 30
     steps:
@@ -38,9 +15,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/Library/Developer/CoreSimulator/Devices
-          key: sim-settled-${{ github.run_id }}
+          key: sim-settled-42991014726
       - name: Restart CoreSimulator
-        run: sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null; xcrun simctl list devices | grep -c Shutdown
+        run: (sudo killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null || true); xcrun simctl list devices | grep -c Shutdown || true
       - uses: ./.github/actions/mac-setup
         with: { scheme: CloudSim }
       - name: Boot + e2e on the settled Simulator
