@@ -43,9 +43,17 @@ runs:
         cache: npm
         cache-dependency-path: api/package-lock.json
 
+    # The release binary is a small download; `brew install` took up to 2 minutes while a Simulator booted.
     - name: Install XcodeGen
       shell: bash
-      run: brew install xcodegen
+      run: |
+        if curl -fsSL --retry 2 -o "$RUNNER_TEMP/xcodegen.zip" https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip \
+           && unzip -q -o "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"; then
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+        else
+          brew install xcodegen
+        fi
 
     - name: Postgres + API tests + API
       shell: bash
