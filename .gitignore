@@ -2,3 +2,6 @@
 build/
 out/
 .DS_Store
+node_modules/
+Support/
+*.xcresult

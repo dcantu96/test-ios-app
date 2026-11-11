@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the app with the newest Xcode on this Mac, boot the newest iOS Simulator,
-# launch the app and capture screenshots + a short video into ./out.
+# Pick the newest Xcode and iOS Simulator on this Mac, then run the XCUITest
+# end-to-end suite against the live API, recording video and exporting step screenshots to ./out.
 set -euo pipefail
 
 SCHEME="${SCHEME:-CloudSim}"
@@ -66,48 +66,62 @@ xcrun simctl ui "$UDID" appearance light || true
 xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
 echo "::endgroup::"
 
-echo "::group::Generate project and build"
+
+echo "::group::Generate project"
 xcodegen generate
-xcodebuild \
+echo "::endgroup::"
+
+echo "::group::Run end-to-end UI tests"
+rm -rf "$OUT/e2e.xcresult"
+xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/e2e.mp4" &
+REC_PID=$!
+sleep 1
+set +e
+API_URL="${API_URL:-http://localhost:8787}" \
+TEST_RUNNER_API_URL="${API_URL:-http://localhost:8787}" \
+xcodebuild test \
   -project "$SCHEME.xcodeproj" \
   -scheme "$SCHEME" \
-  -configuration Debug \
   -destination "id=$UDID" \
   -derivedDataPath build \
+  -resultBundlePath "$OUT/e2e.xcresult" \
+  -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO \
-  build > "$OUT/build.log" 2>&1 || {
-    echo "Build failed. Last lines of the log:"; grep -E "error:|warning:" "$OUT/build.log" | head -50
-    tail -60 "$OUT/build.log"; exit 1; }
-tail -5 "$OUT/build.log"
-APP="$(find build/Build/Products -maxdepth 2 -name "$SCHEME.app" -path '*iphonesimulator*' | head -1)"
-echo "App: $APP"
+  > "$OUT/xcodebuild-test.log" 2>&1
+TEST_STATUS=$?
+set -e
+kill -INT "$REC_PID" 2>/dev/null || true
+wait "$REC_PID" 2>/dev/null || true
+grep -E "Test Case|error:|failed|passed|\*\* TEST" "$OUT/xcodebuild-test.log" | tail -40 || true
 echo "::endgroup::"
 
-echo "::group::Install, launch, capture"
-xcrun simctl install "$UDID" "$APP"
-
-# Devices with more than one screen make simctl io ask which display to use.
-# Probe once and pick the primary display if that happens.
-DISPLAY_ARGS=()
-PROBE="$(xcrun simctl io "$UDID" screenshot "$OUT/.probe.png" 2>&1 || true)"
-rm -f "$OUT/.probe.png"
-if grep -q -- "--display=" <<<"$PROBE"; then
-  DISPLAY_ID="$(grep -E -- '--display=[0-9]+ .*\(primary\)' <<<"$PROBE" | sed -E 's/.*--display=([0-9]+).*/\1/' | head -1)"
-  [ -n "$DISPLAY_ID" ] || DISPLAY_ID="$(grep -oE -- '--display=[0-9]+' <<<"$PROBE" | head -1 | cut -d= -f2)"
-  DISPLAY_ARGS=(--display="$DISPLAY_ID")
-  echo "Multiple displays; using display $DISPLAY_ID"
+echo "::group::Export screenshots"
+if [ -d "$OUT/e2e.xcresult" ]; then
+  xcrun xcresulttool get test-results summary --path "$OUT/e2e.xcresult" > "$OUT/test-summary.json" || true
+  mkdir -p "$OUT/raw-attachments" "$OUT/steps"
+  xcrun xcresulttool export attachments --path "$OUT/e2e.xcresult" --output-path "$OUT/raw-attachments" || true
+  python3 - "$OUT/raw-attachments" "$OUT/steps" <<'PY'
+import json, os, re, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+manifest = os.path.join(src, "manifest.json")
+if not os.path.exists(manifest):
+    sys.exit(0)
+for test in json.load(open(manifest)):
+    for a in test.get("attachments", []):
+        name = a.get("suggestedHumanReadableName") or a["exportedFileName"]
+        name = re.sub(r"_\d+_[0-9A-F-]{36}", "", name)          # drop Xcode's index/UUID suffix
+        stem, ext = os.path.splitext(name)
+        slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-")
+        shutil.copy(os.path.join(src, a["exportedFileName"]), os.path.join(dst, slug + (ext or ".png")))
+        print("step:", slug)
+PY
 fi
-
-xcrun simctl io "$UDID" recordVideo ${DISPLAY_ARGS[@]+"${DISPLAY_ARGS[@]}"} --codec=h264 --force "$OUT/run.mp4" &
-REC_PID=$!
-sleep 2
-xcrun simctl launch "$UDID" "$BUNDLE_ID"
-sleep 6
-xcrun simctl io "$UDID" screenshot ${DISPLAY_ARGS[@]+"${DISPLAY_ARGS[@]}"} "$OUT/screenshot.png"
-sleep 2
-kill -INT "$REC_PID" || true
-wait "$REC_PID" || true
-xcrun simctl spawn "$UDID" launchctl list | grep -q "$BUNDLE_ID" \
-  && echo "App is running" | tee "$OUT/status.txt" \
-  || { echo "App is NOT running" | tee "$OUT/status.txt"; exit 1; }
 echo "::endgroup::"
+
+if [ "$TEST_STATUS" -eq 0 ]; then
+  echo "E2E passed" | tee "$OUT/status.txt"
+else
+  echo "E2E failed" | tee "$OUT/status.txt"
+  tail -80 "$OUT/xcodebuild-test.log"
+fi
+exit "$TEST_STATUS"
