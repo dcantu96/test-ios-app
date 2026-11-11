@@ -3,6 +3,10 @@ name: E2E in iOS Simulator
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "demo/**"]
+  pull_request:
+    branches: [main]
+    paths-ignore: ["**.md", "demo/**"]
   workflow_dispatch:
 
 concurrency:
