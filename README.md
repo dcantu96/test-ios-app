@@ -4,12 +4,12 @@ A minimal SwiftUI app that builds on the newest Xcode and runs in the newest iOS
 
 Each push to `main`, or a manual run from the Actions tab, does the following:
 
-1. Picks the newest non-beta Xcode on the `macos-26` runner.
+1. Picks the newest non-beta Xcode on the `xcode-27` runner (macOS 27).
 2. Picks the newest installed iOS runtime and an iPhone Pro simulator.
 3. Generates the Xcode project with XcodeGen from `project.yml`, then builds it.
 4. Boots the simulator, installs and launches the app, and records `screenshot.png` and `run.mp4`.
-5. Uploads everything in `out/` as the `simulator-output` artifact.
+5. Uploads everything in `out/` as the `simulator-output` artifact, and also commits it to the `simulator-output` branch so you can view the latest screenshot on GitHub.
 
-The UI uses `glassEffect` (Liquid Glass), which only exists in the iOS 26 SDK, so a green run shows the latest SDK is in use.
+The UI uses `glassEffect` (Liquid Glass), which only exists in the iOS 26+ SDK, so a green run shows the latest SDK is in use.
 
 To run a different app, swap the `App/` sources and `project.yml`, or point `scripts/run-in-simulator.sh` at an existing `.xcodeproj`/`.xcworkspace` and scheme.

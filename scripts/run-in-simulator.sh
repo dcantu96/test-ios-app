@@ -9,6 +9,7 @@ OUT="${OUT:-$PWD/out}"
 mkdir -p "$OUT"
 
 echo "::group::Select newest Xcode"
+echo "Installed:"; ls -d /Applications/Xcode*.app
 XCODE="$(ls -d /Applications/Xcode*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)"
 sudo xcode-select -s "$XCODE/Contents/Developer"
 xcodebuild -version | tee "$OUT/xcode-version.txt"
@@ -16,15 +17,19 @@ echo "::endgroup::"
 
 echo "::group::Pick newest iOS runtime and an iPhone"
 xcrun simctl list runtimes -j > "$OUT/runtimes.json"
-RUNTIME_ID="$(python3 - "$OUT/runtimes.json" <<'PY'
+RUNTIME_ID="$(python3 - "$OUT/runtimes.json" "$OUT/runtime.txt" <<'PY'
 import json, sys
 rts = [r for r in json.load(open(sys.argv[1]))["runtimes"]
        if r.get("isAvailable") and r.get("platform", r["name"].split()[0]) == "iOS"]
 rts.sort(key=lambda r: [int(x) for x in r["version"].split(".")])
+label = lambda r: "%s (%s)" % (r["name"], r.get("buildversion", ""))
+for r in rts:
+    print("Available runtime: " + label(r), file=sys.stderr)
+open(sys.argv[2], "w").write(label(rts[-1]) + "\n")
 print(rts[-1]["identifier"])
 PY
 )"
-echo "Runtime: $RUNTIME_ID"
+echo "Runtime: $RUNTIME_ID ($(cat "$OUT/runtime.txt"))"
 
 xcrun simctl list devices -j > "$OUT/devices.json"
 UDID="$(python3 - "$OUT/devices.json" "$RUNTIME_ID" <<'PY'
@@ -36,7 +41,15 @@ print(pref[-1]["udid"] if pref else "")
 PY
 )"
 if [ -z "$UDID" ]; then
-  DEVTYPE="$(xcrun simctl list devicetypes | grep -E '^iPhone [0-9]+ Pro \(' | tail -1 | sed -E 's/.*\((.*)\)/\1/')"
+  # No ready-made iPhone for this runtime: create one from a device type it supports.
+  DEVTYPE="$(python3 - "$OUT/runtimes.json" "$RUNTIME_ID" <<'PY'
+import json, sys
+r = [x for x in json.load(open(sys.argv[1]))["runtimes"] if x["identifier"] == sys.argv[2]][0]
+phones = [d for d in r.get("supportedDeviceTypes", []) if d.get("productFamily") == "iPhone"]
+pref = [d for d in phones if "Pro" in d["name"] and "Max" not in d["name"]] or phones
+print(pref[-1]["identifier"])
+PY
+)"
   UDID="$(xcrun simctl create "CloudSim iPhone" "$DEVTYPE" "$RUNTIME_ID")"
 fi
 xcrun simctl list devices | grep "$UDID" | tee "$OUT/device.txt"
