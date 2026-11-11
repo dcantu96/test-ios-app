@@ -88,22 +88,33 @@ jobs:
       - name: Compose the MP4
         run: |
           xcrun simctl shutdown all || true   # free the CPUs for the encoder
-          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet imageio-ffmpeg pillow
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet imageio-ffmpeg pillow numpy
           export FFMPEG="$("$RUNNER_TEMP/venv/bin/python" -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
           DEVICE="$(sed -E 's/ \([0-9A-F-]{36}\)//; s/ \((Booted|Shutdown)\)//; s/^ +//; s/ +$//' out/device.txt)"
           RUNTIME="$(sed -E 's/ \(.*//' out/runtime.txt)"
           XCODE="$(head -1 out/xcode-version.txt)"
           FOOTER="${PR:+PR #$PR · }$BRANCH · ${HEAD_SHA::7} · $DEVICE, $RUNTIME · $XCODE"
           "$RUNNER_TEMP/venv/bin/python" demo/compose.py --recording out-demo/raw.mp4 --markers out-demo/markers.json \
-            --out demo.mp4 --footer "$FOOTER" --quality high
+            --out demo.mp4 --footer "$FOOTER" --quality high --save-source preview/source
+
+      # Checks the finished video (sync, dead air, typing pace, flashes, caption time) and makes contact sheets.
+      # It reports; it never fails the job. Read review.md and every sheet before calling a demo done.
+      - name: Review the MP4
+        run: |
+          export FFMPEG="$("$RUNNER_TEMP/venv/bin/python" -c 'import os, imageio_ffmpeg; os.environ.pop("IMAGEIO_FFMPEG_EXE", None); print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          mkdir -p preview/sheets
+          "$RUNNER_TEMP/venv/bin/python" demo/review.py demo.mp4 --sheets preview/sheets --out review.md \
+            || printf '## Demo review\n\nThe review script itself failed; see the job log.\n' > review.md
 
       - name: Publish the preview branch
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           WORK="$(mktemp -d)"
-          cp demo.mp4 "$WORK/"
-          printf '# Demo preview\n\nFrom `%s` at `%s`. Thrown away when the PR closes.\n\n[demo.mp4](demo.mp4)\n' "$BRANCH" "${HEAD_SHA::7}" > "$WORK/README.md"
+          cp demo.mp4 demo.report.json review.md "$WORK/"
+          cp -R preview/sheets preview/source "$WORK/"
+          { printf '# Demo preview\n\nFrom `%s` at `%s`. Thrown away when the PR closes.\n\n[demo.mp4](demo.mp4)\n\n' "$BRANCH" "${HEAD_SHA::7}"; cat review.md
+            printf '\n`source/` holds the synced screen recording and markers: `demo/compose.py --recording source/source.mp4 --markers source/markers.json` redraws the board without a Mac.\n'; } > "$WORK/README.md"
           cd "$WORK"
           git init -q -b preview
           git config user.name "github-actions[bot]"
@@ -123,7 +134,9 @@ jobs:
           **[Watch demo.mp4](${URL})** (1080p60, ${SIZE}), recorded from \`${HEAD_SHA::7}\` in the iOS Simulator on a cloud Mac, driving the app against the live API and Postgres.
 
           This is a preview, not a test: the e2e check is what gates the merge. It's re-recorded on every push and deleted when this PR closes.
+
           EOF
+          cat review.md >> body.md
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md --edit-last --create-if-none \
             || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
 

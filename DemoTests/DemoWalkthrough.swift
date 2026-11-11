@@ -1,14 +1,17 @@
 import XCTest
 
-/// Not part of the e2e gate. A scripted walkthrough at human pace that CI records as a PR's demo video.
-/// Alongside the actions it writes markers (captions, taps, stretches to fast-forward) as an attachment named
-/// "markers"; demo/compose.py turns the recording plus those markers into the finished MP4.
+/// Not part of the e2e gate. A scripted walkthrough that CI records as a PR's demo video.
+/// Alongside the actions it writes markers (captions, taps, typing, deliberate pauses, fast-forwards, cuts) as an
+/// attachment named "markers"; demo/compose.py turns the recording plus those markers into the finished MP4, and
+/// demo/review.py checks the result. Before changing this file, read "Writing the walkthrough" in CLAUDE.md.
 ///
-/// When a PR changes what the app does, update this walkthrough so the demo shows the change.
+/// Pacing: only pause() sets the pace. XCUITest's own slowness (finding elements, waiting for the app to idle) is
+/// trimmed out by compose.py, so a stretch is kept only if it's a pause(), a fastForward() or the screen is moving.
 final class DemoWalkthrough: XCTestCase {
     private var app: XCUIApplication!
     private var events: [[String: Any]] = []
-    private let message = "Dear future me: this demo recorded itself."
+    private let letter = "Open this next year."
+    private let note = "Dear future me: you made it."
 
     @MainActor
     func testRecordWalkthrough() throws {
@@ -17,81 +20,77 @@ final class DemoWalkthrough: XCTestCase {
 
         let field = app.textFields["messageField"]
         XCTAssertTrue(field.waitForExistence(timeout: 20))
-        pause(0.8)
-        chapter(style: "title", kicker: "Notes to your future self", title: "Time Capsule",
-                sub: "Write something today. The server keeps it sealed until it is time.")
-        pause(3.4)
-
-        // Write a note and seal it for ten seconds (its countdown runs during the next chapter).
-        chapter(title: "Write it. Pick when it opens.", sub: "Ten seconds, a minute, an hour, a day or a year.")
-        pause(1.4)
-        tap(field)
-        pause(0.6)
-        type(message, into: field)
-        pause(0.9)
-        tap(app.buttons["1m"])
-        pause(0.7)
-        tap(app.buttons["10s"])
-        pause(1.0)
-        tap(app.buttons["sealButton"])
         let rows = app.buttons.matching(identifier: "capsuleRow")
-        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
-        pause(1.6)
+        pause(0.6)
+        chapter(style: "title", kicker: "Notes to your future self", title: "Time Capsule",
+                sub: "Write something today. The server keeps it sealed until it's time.")
+        pause(4.2)
 
-        // A letter sealed for a year: try to open it, and the server says no. (A year, not ten seconds, so the
-        // refusal can't race a slow CI machine.)
-        chapter(title: "Sealed means sealed.",
-                sub: "Tap it early and the server refuses. Not even the app can read the message yet.",
-                chip: "GET /capsules/:id  \u{2192}  423 Locked")
+        // 1. Write a letter and seal it for a year.
+        chapter(title: "Write it. Pick when it opens.", sub: "Ten seconds, a minute, an hour, a day or a year.")
         pause(1.2)
         tap(field)
-        type("Open this next year.", into: field)
-        pause(0.5)
+        pause(0.4)
+        type(letter, into: field)
+        pause(0.7)
         tap(app.buttons["1y"])
+        pause(0.8)
+        tap(app.buttons["sealButton"])
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        pause(1.4)
+
+        // 2. Try to open it now: the server refuses.
+        chapter(title: "Sealed means sealed.",
+                sub: "Tap it early and the server refuses. Not even the app can read it yet.",
+                chip: "GET /capsules/:id  \u{2192}  423 Locked")
+        pause(1.8)
+        tap(rows.firstMatch)
+        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10))
+        pause(3.0)
+
+        // 3. A note for ten seconds: watch it count down (fast-forwarded), then break the seal.
+        chapter(title: "When time is up, break the seal.",
+                sub: "This one opens in ten seconds. Only then does the server hand it over.",
+                chip: "GET /capsules/:id  \u{2192}  200 OK")
+        pause(1.2)
+        tap(field)
+        pause(0.4)
+        type(note, into: field)
+        pause(0.6)
+        tap(app.buttons["10s"])
         pause(0.6)
         tap(app.buttons["sealButton"])
-        let letter = rows.firstMatch
         XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 10))
-        pause(1.2)
-        tap(letter)
-        XCTAssertTrue(app.staticTexts["lockedBanner"].waitForExistence(timeout: 10))
-        pause(2.8)
-
-        // The ten-second note unlocks (fast-forwarded if it still has time left) and the seal cracks open.
-        let note = rows.element(boundBy: 1)
+        let fresh = rows.firstMatch  // newest first
+        pause(1.0)
         let waitStart = Date()
-        let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: note)
+        let ready = expectation(for: NSPredicate(format: "value == 'ready'"), evaluatedWith: fresh)
         wait(for: [ready], timeout: 30)
-        fastForward(from: waitStart, factor: 5)
-        pause(0.6)
-
-        chapter(title: "When time is up, break the seal.",
-                sub: "The wax cracks, and only now does the server hand over the message.",
-                chip: "GET /capsules/:id  \u{2192}  200 OK")
-        pause(1.4)
-        tap(note)
+        fastForward(from: waitStart, factor: 4)
+        pause(1.0)
+        tap(fresh)
         XCTAssertTrue(app.staticTexts["revealedMessage"].waitForExistence(timeout: 10))
-        pause(4.0)
+        pause(3.6)
 
-        // Quit and come back: the capsule is loaded from Postgres.
-        chapter(title: "Still there after a relaunch.",
-                sub: "Quit the app, open it again: the capsule comes back from Postgres, already opened.")
-        pause(1.2)
+        // 4. Quit and reopen. The home screen and launch screen in between are cut out.
+        chapter(title: "Still there after a relaunch.", sub: "Quit, reopen: both capsules come back from Postgres.")
+        pause(1.0)
         let relaunchStart = Date()
         app.terminate()
         app = launchApp()
-        let opened = app.buttons.matching(NSPredicate(format: "identifier == 'capsuleRow' AND label CONTAINS %@", message)).firstMatch
+        let opened = app.buttons.matching(NSPredicate(format: "identifier == 'capsuleRow' AND label CONTAINS %@", note)).firstMatch
         XCTAssertTrue(opened.waitForExistence(timeout: 20))
-        fastForward(from: relaunchStart, factor: 4)
-        pause(3.2)
+        XCTAssertTrue(waitForCount(app.buttons.matching(identifier: "capsuleRow"), 2))
+        cut(from: relaunchStart)
+        pause(3.0)
 
         chapter(style: "end", title: "Time Capsule", sub: "SwiftUI app, Node API, Postgres. Recorded on a cloud Mac.")
-        pause(3.4)
+        pause(4.0)
         events.append(["t": now(), "kind": "end"])
         attachMarkers()
     }
 
-    // MARK: - Pacing and markers
+    // MARK: - Actions that leave markers
 
     @MainActor
     private func launchApp() -> XCUIApplication {
@@ -103,7 +102,12 @@ final class DemoWalkthrough: XCTestCase {
 
     private func now() -> Double { Date().timeIntervalSince1970 }
 
-    private func pause(_ seconds: Double) { Thread.sleep(forTimeInterval: seconds) }
+    /// The only thing that sets the pace: a deliberate hold, kept as is in the video.
+    private func pause(_ seconds: Double) {
+        let start = now()
+        Thread.sleep(forTimeInterval: seconds)
+        events.append(["t": start, "kind": "hold", "until": now()])
+    }
 
     private func chapter(style: String = "step", kicker: String? = nil, title: String, sub: String? = nil, chip: String? = nil) {
         var e: [String: Any] = ["t": now(), "kind": "chapter", "style": style, "title": title]
@@ -113,34 +117,60 @@ final class DemoWalkthrough: XCTestCase {
         events.append(e)
     }
 
-    /// Taps like a finger would, and records where, so the video can show a touch ripple.
-    /// XCUITest spends most of a tap() call finding the element; the touch itself lands at the end of the call,
-    /// so the marker is stamped when tap() returns.
+    /// Taps like a finger would, and records the element's box and the window the touch landed in. compose.py
+    /// draws the touch circle on the first on-screen change near the element inside that window.
     @MainActor
     private func tap(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10), "can't tap \(element)")
-        let f = element.frame, screen = app.windows.firstMatch.frame
+        var e = box(element.frame)
+        let pre = now()
         element.tap()
-        events.append(["t": now() - 0.12, "kind": "tap",
-                       "x": (f.midX - screen.minX) / max(screen.width, 1),
-                       "y": (f.midY - screen.minY) / max(screen.height, 1)])
+        e["kind"] = "tap"
+        e["pre"] = pre
+        e["t"] = now() - 0.12
+        events.append(e)
     }
 
-    /// Types a word at a time. Each typeText call costs XCUITest most of a second, so per-letter typing would
-    /// drag; per-word reads like someone typing and keeps the demo moving.
+    /// One typeText call per message, so it appears letter by letter. compose.py re-times the keystrokes it sees
+    /// to a person's pace (XCUITest types in bursts).
     @MainActor
     private func type(_ text: String, into element: XCUIElement) {
-        let words = text.split(separator: " ", omittingEmptySubsequences: false)
-        for (i, word) in words.enumerated() {
-            element.typeText(String(word) + (i < words.count - 1 ? " " : ""))
-        }
+        var e = box(element.frame)
+        let start = now()
+        element.typeText(text)
+        e["kind"] = "type"
+        e["t"] = start
+        e["until"] = now()
+        e["chars"] = text.count
+        events.append(e)
     }
 
+    /// The element's centre and size as a share of the screen.
+    @MainActor
+    private func box(_ f: CGRect) -> [String: Any] {
+        let screen = app.windows.firstMatch.frame
+        let w = max(screen.width, 1), h = max(screen.height, 1)
+        return ["x": Double((f.midX - screen.minX) / w), "y": Double((f.midY - screen.minY) / h),
+                "w": Double(f.width / w), "h": Double(f.height / h)]
+    }
+
+    @MainActor
+    private func waitForCount(_ query: XCUIElementQuery, _ count: Int) -> Bool {
+        let e = expectation(for: NSPredicate(format: "count >= %d", count), evaluatedWith: query)
+        return XCTWaiter().wait(for: [e], timeout: 10) == .completed
+    }
+
+    /// Plays a real-time wait (a countdown) faster, so it's visible but short.
     private func fastForward(from start: Date, factor: Double) {
         let until = now() - 0.25
         if until - start.timeIntervalSince1970 > 1.0 {
             events.append(["t": start.timeIntervalSince1970 + 0.3, "kind": "speed", "until": until, "factor": factor])
         }
+    }
+
+    /// Drops a stretch from the video (the home screen and launch screen during a relaunch).
+    private func cut(from start: Date) {
+        events.append(["t": start.timeIntervalSince1970, "kind": "cut", "until": now() - 0.2])
     }
 
     private func attachMarkers() {

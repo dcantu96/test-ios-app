@@ -29,7 +29,7 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
    - Start any wait first and do other checks while it runs (the 10-second capsule is sealed first).
    - Every wait is `waitForExistence` or an expectation with a timeout, never a fixed `sleep` (the one `sleep(1)` is only for a screenshot of a finished animation).
 4. **Write the Swift.** Keep identifiers (`accessibilityIdentifier`) on everything a test touches. You can't compile Swift here, so read your code twice: check Swift 6 concurrency (`@MainActor`), optionals and API names. A compile error costs a whole CI round (about 5 minutes).
-5. **Update the demo** if the change is visible: in `DemoTests/DemoWalkthrough.swift`, add a `chapter(title:sub:chip:)` caption, use `tap(...)` and `type(...)` so it reads like a person, and `fastForward(from:factor:)` over any waiting. Preview the look locally with `demo/compose.py` and a hand-written `markers.json` if you change captions or the board (see "Demo videos").
+5. **Update the demo** if the change is visible: go through "Before writing demo steps" (under "Demo videos") first, then edit `DemoTests/DemoWalkthrough.swift`. To change captions or the board, iterate in Linux on the previous run's `source/` (see "Demo videos").
 6. **Push once and open the PR** (`gh pr create --base main`, or `gh api repos/dcantu96/test-ios-app/pulls -f ...` if GraphQL is blocked). Both Mac jobs start at once.
 7. **Wait and measure.** Poll, then read the timings:
    ```sh
@@ -44,10 +44,9 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
    git fetch --depth 1 origin +e2e-output/<branch>:refs/remotes/origin/e2e-output/<branch>
    mkdir -p /tmp/e2e && git archive origin/e2e-output/<branch> | tar -x -C /tmp/e2e     # README.md, steps/*.png, api.log, xcodebuild-test.log
    git fetch --depth 1 origin +demo-preview/<branch>:refs/remotes/origin/demo-preview/<branch>
-   mkdir -p /tmp/demo && git archive origin/demo-preview/<branch> | tar -x -C /tmp/demo  # demo.mp4
-   ffmpeg -ss 12 -i /tmp/demo/demo.mp4 -frames:v 1 /tmp/f.png                           # look at frames
+   mkdir -p /tmp/demo && git archive origin/demo-preview/<branch> | tar -x -C /tmp/demo  # demo.mp4, review.md, sheets/, source/
    ```
-   Read the step screenshots and a few demo frames with the Read tool before saying it works. A green run only says the assertions passed.
+   Read every e2e step screenshot, then **review the demo** (below): `review.md`, then every contact sheet in `sheets/`. A green run only says the assertions passed.
 9. **Fix in one go.** If something failed, read `--log-failed` and `xcodebuild-test.log` first, fix everything you can see, then push once. Don't push to "see if it's fixed": every round is about 5 minutes and about 10 Mac minutes.
 10. The **e2e** check must be green before merging; the user merges (it can't be merged from the sandbox). A failed demo never blocks a merge, but fix the walkthrough if it broke.
 
@@ -60,7 +59,7 @@ Measured on this repo: **about 5 minutes from push to both "e2e passed" and "dem
 | Build (no Simulator running) | ~13 s | ~13 s |
 | Simulator boot | 40–95 s | 40–95 s |
 | Tests / walkthrough (on a just-booted Simulator) | 100–180 s | 120–200 s |
-| Compose MP4 (Simulator shut down) | | ~35 s |
+| Compose MP4 + review (Simulator shut down) | | ~50–70 s |
 | **Job** | **~4.5 min** | **~5–6 min** |
 
 Before this work it was e2e ~5 min and demo ~10 min (record, then a Linux job composing for ~4 min), 593 s push-to-done; now ~290–370 s.
@@ -78,9 +77,56 @@ Before this work it was e2e ~5 min and demo ~10 min (record, then a Linux job co
 
 ## Demo videos
 
-- `scripts/run-demo.sh` (Mac): starts `simctl io recordVideo`, notes when the first frame was taken, runs the `CloudSimDemo` scheme from the shared build, then pulls the `markers` attachment (captions, taps, fast-forwards) out of the result bundle into `out-demo/markers.json`.
-- `demo/compose.py` (needs an ffmpeg with libx264 and Pillow; CI uses the static ffmpeg from the `imageio-ffmpeg` pip wheel, `FFMPEG=...`): draws the board (dusk sky, phone, captions, tap ripples, footer with PR, commit, device and Xcode), fast-forwards the marked waits, and encodes 1920×1080 at 60 fps. `--quality high` is x264 `veryfast` CRF 16 (visually identical to `slow`, SSIM 0.998, several times faster). It decodes each still once with the `loop` filter (`-loop 1` re-decoded the PNG every frame) and cuts the recording in one pass.
-- Iterate on the look in Linux without a Mac: point `compose.py` at any recording plus a hand-written `markers.json` (format in its docstring) and use `--quality draft --keep <dir>`. In this sandbox, get a static ffmpeg with `python3 -m venv v && v/bin/pip install imageio-ffmpeg pillow`, then `FFMPEG=$(ls v/lib/python3*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*)`.
+A demo is a short film of the change for people reviewing the PR. CI records `DemoTests/DemoWalkthrough.swift` driving the app, `demo/compose.py` turns the recording into the 1080p60 MP4, and `demo/review.py` checks it. The first fast-CI video (PR #2, 102 s) had every flaw below. They were found by watching it frame by frame, and each one is now a rule, an automatic fix or an automatic check.
+
+### Before writing demo steps (go through this list first)
+
+1. **One idea per chapter, shown on camera.** Write the captions first: each `chapter(...)` names one thing the viewer will *see* happen right after it. If something happens off camera (a countdown that ran out while you were typing something else), reorder the story so it happens on screen.
+2. **Captions need reading time.** About 1 s plus 25 characters a second (title + sub + chip). Size the `pause()` after a caption, or the actions under it, to cover that. `compose.py` warns about short chapters and `review.py` flags them. Keep subs to one short sentence.
+3. **Text must fit its field.** A message longer than the field scrolls sideways and loses its first letters. Keep typed text under about 30 characters.
+4. **Type a message in one `type(...)` call.** It appears letter by letter, and `compose.py` re-times the keystrokes to about 11 a second. Typing word by word made words pop in whole, with stalls between them.
+5. **Tap only what the viewer should see tapped**, each once, in a sensible order. No warm-up taps (tapping "1m" then "10s" read as a mistake). Every `tap(...)` draws a touch circle.
+6. **`pause()` is the only pacing.** Everything else XCUITest does (finding elements, waiting for the app to idle, slow typing) leaves the screen still, and `compose.py` trims any still stretch outside a `pause()` to a quarter second. So after every visible result, `pause()` long enough to see it (1–3 s). Never count on XCUITest's slowness for pacing.
+7. **Real waits get `fastForward(from:factor:)`** (a countdown plays 4× so it's visible but short).
+8. **Anything that isn't the app gets `cut(from:)`**: relaunching shows the home screen and a white launch screen. A cut drops it, with a quick dip on each side.
+9. **Aim for 45–75 s.** `review.py` flags anything over 90 s.
+
+### Reviewing the finished video (every time, before calling it done)
+
+CI runs `demo/review.py` after composing and posts its findings in the PR comment. Then, by hand:
+1. Read `review.md` (it's also in the PR comment). Fix every flag, or say why it's fine.
+2. Read **every** contact sheet in `sheets/` (a frame every 0.5 s, labeled with its time) with the Read tool. Look for: captions that don't match what the phone shows; a touch circle with nothing happening; text clipped in a field; the home screen or a blank screen; a stretch where nothing moves; anything ugly at a transition.
+3. To check a moment closely: `ffmpeg -ss 12.5 -i demo.mp4 -frames:v 1 f.png`, then Read it.
+4. Fix all of it in one go: the walkthrough (needs a Mac run), or the board and timing (iterate in Linux on `source/`, below).
+
+What `review.py` checks, against `demo.report.json` (what `compose.py` placed where) and the pixels:
+- **sync**: every touch circle sits on a visible response near the tapped element
+- **dead air**: no still stretch over 2 s outside a `pause()`, and none over 5 s at all
+- **typing**: 5–30 characters a second, no stall over 0.6 s
+- **flashes**: nothing pops on screen and away within a second, like a home screen or launch screen
+- **captions**: up long enough to read
+- **length**: under 90 s
+
+### Flaws found in the 102 s video, and what fixed them
+
+| Flaw | Cause | Fix |
+|---|---|---|
+| Captions, touch circles and fast-forwards about 12 s late | The recording's first frame came ~12 s after simctl printed "Recording started" (an idle Simulator sends no frames), so `recordingStart` was wrong | `compose.py` syncs on its own: it matches each tap and typing call to on-screen changes near that element and prints the offset (`sync: the recording runs -12.2s ...`). Touch circles land on the first change near the element |
+| Touch circles on nothing ("unintentional presses") | Same offset | Same |
+| Typing took 25 s for one sentence, word by word with ~3 s stalls | One `typeText` per word; each call costs ~3 s on a busy Simulator | One `type()` per message; keystrokes re-timed to ~11 a second |
+| 14 s with nothing moving before a seal, and more gaps like it | XCUITest finding elements (~5 s per tap on a busy Simulator) | Still stretches outside `pause()` trimmed to 0.25 s |
+| Home screen, then a white screen, during the relaunch | `app.terminate()` and `launch()` on camera | `cut(from:)` around the relaunch |
+| The 10 s capsule unlocked off camera while the next note was typed | Story order copied from the e2e test | Letter first, then the 10 s note with its countdown on screen |
+| A headline ending on one word ("…when it / opens.") | Greedy line wrapping | Balanced wrapping: same line count, even lengths |
+| Star trails across the captions, reading as strikethroughs | Random trails anywhere in the sky | Trails kept out of the caption column |
+| Message clipped at the start of the field | Message longer than the field | Shorter messages (checklist 3) |
+
+### Tools
+
+- `scripts/run-demo.sh` (Mac): starts `simctl io recordVideo`, notes when simctl says it started (rough; `compose.py` syncs precisely), runs the `CloudSimDemo` scheme from the shared build, then pulls the `markers` attachment out of the result bundle into `out-demo/markers.json`.
+- `demo/compose.py` (needs an ffmpeg with libx264, Pillow and numpy; CI uses the static ffmpeg from the `imageio-ffmpeg` pip wheel, `FFMPEG=...`): syncs, trims dead air, applies fast-forwards and cuts, draws the board (dusk sky, phone, captions, touch circles, footer with PR, commit, device and Xcode), and encodes 1920×1080 at 60 fps. It writes `demo.report.json` beside the video. `--quality high` is x264 `veryfast` CRF 16 (visually identical to `slow`, SSIM 0.998, several times faster). It decodes each still once with the `loop` filter (`-loop 1` re-decoded the PNG every frame) and cuts the recording in one pass. `--save-source DIR` also writes the synced screen recording and markers (CI publishes them as `source/`).
+- `demo/review.py demo.mp4 --sheets DIR --out review.md`: the checks above, plus contact sheets.
+- **Iterate on the board and timing in Linux, without a Mac:** fetch the `demo-preview/<branch>` branch, then `python3 demo/compose.py --recording source/source.mp4 --markers source/markers.json --out demo.mp4 --quality draft` and `python3 demo/review.py demo.mp4 --sheets sheets`. You can also edit `markers.json` by hand (format in `compose.py`'s docstring). In this sandbox, get a static ffmpeg with `python3 -m venv v && v/bin/pip install imageio-ffmpeg pillow numpy`, then `FFMPEG=$(ls v/lib/python3*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*)`. Changing the walkthrough itself needs a Mac run.
 - Re-record a PR's demo by pushing again, or `gh workflow run CI --ref <branch>` once the workflow is on `main`.
 
 ## API work (can be done fully in Linux)
@@ -112,6 +158,7 @@ The API is TypeScript run directly by Node (`--experimental-strip-types`). Use o
 - **Device-specific runtimes.** The Xcode 27 image includes runtimes like `iOS-27-2-iPhone19-4` that only run one device (a dual-screen "iPhone Duo"); `simctl io` then fails with "Cannot choose between 2 displays". `sim.sh` prefers runtime identifiers without a device suffix.
 - **A runtime's `supportedDeviceTypes` is oldest first by release, not by model number.** Taking the last "Pro" picked an iPhone 11 Pro; `sim.sh` picks the highest model number.
 - **`macos-26` vs `xcode-27`.** The `macos-26` image tops out at Xcode 26.x / iOS 26.x; the newest SDK is on the `xcode-27` image. When a new Xcode image ships, change `runs-on`.
+- **A Simulator recording doesn't start when simctl says it does.** The first frame comes when the screen next changes, which was ~12 s later on a busy runner. Never trust `recordingStart` alone; `compose.py` syncs on the content.
 - **Simulator recordings have messy timestamps.** `simctl recordVideo` writes a variable frame rate with out-of-order decode timestamps, so ffmpeg filters that read timestamps over the whole file (`trim`, `select`, `fps`) see the wrong frames. Seek on the input (`ffmpeg -ss 150 -i rec.mp4 …`); `compose.py` does.
 - **Videos inside Claude's Motion artifacts don't play in the mobile app.** The user wants demos as MP4 files; don't build demos as artifacts.
 - **Node's test runner output.** Node 24 prints `ℹ pass 3` (spec reporter), not TAP's `# pass 3`. Parse both.
@@ -125,5 +172,5 @@ The API is TypeScript run directly by Node (`--experimental-strip-types`). Use o
 
 - Commit as `David Cantu <dcantu96@users.noreply.github.com>` with a `Co-Authored-By: Claude` trailer.
 - Branch, PR into `main`, green e2e, then the user merges. No direct pushes to `main`.
-- Every user-facing change gets an e2e step with a `snap(...)` and, if it's visible, a beat in the demo walkthrough.
+- Every user-facing change gets an e2e step with a `snap(...)` and, if it's visible, a beat in the demo walkthrough, written against the demo checklist and reviewed with `review.py` and the contact sheets.
 - Keep `README.md` describing the product and `CLAUDE.md` describing how to work on it.

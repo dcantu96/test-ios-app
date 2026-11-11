@@ -14,11 +14,24 @@ markers.json:
   "recordingStart": <epoch seconds when the recording's first frame was taken>,
   "events": [
     {"t": <epoch>, "kind": "chapter", "style": "title"|"step"|"end", "kicker": "...", "title": "...", "sub": "...", "chip": "..."},
-    {"t": <epoch>, "kind": "tap", "x": 0..1, "y": 0..1},          # position on the screen, normalized
+    {"t": <epoch>, "kind": "tap", "x": 0..1, "y": 0..1, "w": 0..1, "h": 0..1, "pre": <epoch>},
+                                       # the tapped element (centre and size, normalized); the touch lands in [pre, t]
+    {"t": <epoch>, "kind": "type", "until": <epoch>, "x", "y", "w", "h"},  # one typeText call into that element
+    {"t": <epoch>, "kind": "hold", "until": <epoch>},               # a deliberate pause: never trimmed
     {"t": <epoch>, "kind": "speed", "until": <epoch>, "factor": 4},  # fast-forward this stretch
+    {"t": <epoch>, "kind": "cut", "until": <epoch>},                # drop this stretch (a quick dip hides the join)
     {"t": <epoch>, "kind": "end"}
-  ]
+  ],
+  "synced": true                       # optional: recordingStart is exact, skip the automatic sync
 }
+
+What it fixes on its own (see "Demo videos" in CLAUDE.md for why):
+- Sync. The recording's first frame can come many seconds after simctl says "Recording started" (an idle
+  Simulator sends no frames), so `recordingStart` alone can put captions and ripples 10+ s late. The script
+  finds the offset by matching taps and typing to on-screen changes in the right place, and prints it.
+- Dead air. XCUITest spends seconds finding each element and typing each word on a busy Simulator. Stretches
+  where the screen doesn't change, outside "hold" (a deliberate pause), "speed" and "cut", are trimmed to
+  a quarter second. Each chapter keeps enough time to read its caption.
 """
 import argparse
 import json
@@ -82,12 +95,23 @@ def draw_background(path):
     d = ImageDraw.Draw(img, "RGBA")
     rng = random.Random(11)
     pole = (300 * S, -700 * S)
-    for _ in range(60):
+    # Trails crossing the caption column read as strikethroughs on the text, so none may pass through it.
+    keep_out = (TEXT_X - 60, 200, TEXT_X + TEXT_W + 60, 880)
+    placed = 0
+    for _ in range(600):
+        if placed >= 46:
+            break
         rad = (820 + rng.random() * 1500) * S
         a0 = math.pi * (0.12 + rng.random() * 0.8)
         length = 0.04 + rng.random() * 0.09
         width = max(2, int((1.4 + rng.random() * 2.2) * S))
         alpha = int(255 * (0.14 + rng.random() * 0.34))
+        pts = [(pole[0] / S + rad / S * math.cos(a0 + length * i / 12), pole[1] / S + rad / S * math.sin(a0 + length * i / 12)) for i in range(13)]
+        if any(keep_out[0] <= x <= keep_out[2] and keep_out[1] <= y <= keep_out[3] for x, y in pts):
+            continue
+        if not any(0 <= x <= W and 0 <= y <= H for x, y in pts):
+            continue
+        placed += 1
         box = [pole[0] - rad, pole[1] - rad, pole[0] + rad, pole[1] + rad]
         d.arc(box, math.degrees(a0), math.degrees(a0 + length), fill=INK + (alpha,), width=width)
         hx, hy = pole[0] + rad * math.cos(a0 + length), pole[1] + rad * math.sin(a0 + length)
@@ -154,6 +178,8 @@ def draw_ripple(path):
 
 
 def wrap(draw, text, f, width):
+    """Greedy wrap to find the line count, then balance: the same number of lines with the shortest longest
+    line, so a headline never ends on one stranded word ("Write it. Pick when it / opens.")."""
     words, lines, line = text.split(), [], ""
     for w in words:
         trial = (line + " " + w).strip()
@@ -164,7 +190,30 @@ def wrap(draw, text, f, width):
             line = w
     if line:
         lines.append(line)
-    return lines
+    n = len(lines)
+    if n < 2:
+        return lines
+    best = None
+
+    def split(i, k):  # words[i:] into k lines
+        if k == 1:
+            ln = " ".join(words[i:])
+            return [ln] if draw.textlength(ln, font=f) <= width else None
+        out = None
+        for j in range(i + 1, len(words) - k + 2):
+            head = " ".join(words[i:j])
+            if draw.textlength(head, font=f) > width:
+                break
+            rest = split(j, k - 1)
+            if rest:
+                cand = [head] + rest
+                if out is None or max(draw.textlength(x, font=f) for x in cand) < max(draw.textlength(x, font=f) for x in out):
+                    out = cand
+        return out
+
+    if len(words) <= 24:
+        best = split(0, n)
+    return best or lines
 
 
 def draw_caption(path, ev):
@@ -236,32 +285,120 @@ def draw_footer(bg_path, text):
 
 # ── time ───────────────────────────────────────────────────────────────────────
 
-def build_segments(start, end, speeds):
-    """Cut [start, end] of the recording into (a, b, factor) pieces; sped-up stretches play `factor` times faster."""
+AN_FPS, AN_W, AN_H = 10, 144, 312   # the analysis copy of the recording: 10 fps, small, grayscale
+PIX_DIFF = 14                        # a pixel "changed" if it moved more than this (0-255)
+STATIC_FRAC = 0.002                  # a frame is "static" if less than this share of pixels changed
+                                     # (a blinking cursor or a "34 sec ago" label stays under it; a typed word doesn't)
+TRIM_KEEP = 0.25                     # what's left of a trimmed static stretch, in seconds
+TYPE_KEEP = 0.12                     # ... between keystrokes
+TYPE_RATE = 11.0                     # characters a second: typing is re-timed to this pace
+
+
+def load_frames(recording, s0, length):
+    """The recording from s0 for `length` seconds as a (frames, H, W) uint8 array at AN_FPS. Seeking on the input
+    keeps simctl's messy timestamps out of the fps filter (see build_screen)."""
+    import numpy as np
+    raw = subprocess.run([FFMPEG, "-v", "error", "-ss", f"{s0:.3f}", "-t", f"{length:.3f}", "-i", recording,
+                          "-vf", f"fps={AN_FPS},scale={AN_W}:{AN_H}:flags=area,format=gray", "-f", "rawvideo", "-"],
+                         check=True, capture_output=True).stdout
+    n = len(raw) // (AN_W * AN_H)
+    return np.frombuffer(raw[: n * AN_W * AN_H], dtype=np.uint8).reshape(n, AN_H, AN_W)
+
+
+def change_maps(frames):
+    """changed[k] = which pixels differ between frame k-1 and k (changed[0] is all False)."""
+    import numpy as np
+    d = np.zeros(frames.shape, dtype=bool)
+    d[1:] = np.abs(frames[1:].astype(np.int16) - frames[:-1].astype(np.int16)) > PIX_DIFF
+    return d
+
+
+def region_series(changed, ev, grow=0.06):
+    """Share of changed pixels per frame inside the event's element (normalized box), grown a little."""
+    import numpy as np
+    w, h = ev.get("w", 0.2), ev.get("h", 0.06)
+    x0 = max(0.0, ev["x"] - w / 2 - grow); x1 = min(1.0, ev["x"] + w / 2 + grow)
+    y0 = max(0.0, ev["y"] - h / 2 - grow / 2); y1 = min(1.0, ev["y"] + h / 2 + grow / 2)
+    sub = changed[:, int(y0 * AN_H): max(int(y0 * AN_H) + 1, int(y1 * AN_H)), int(x0 * AN_W): max(int(x0 * AN_W) + 1, int(x1 * AN_W))]
+    return sub.reshape(len(changed), -1).mean(axis=1) if sub.size else np.zeros(len(changed))
+
+
+def find_offset(changed, actions, s0, lo=-45.0, hi=15.0):
+    """How far the recording's clock is from the markers' clock. Each action (a tap or a typed word) must change
+    the screen near its element while it runs; slide the actions along the recording and keep the offset where
+    the most of them line up with a change in the right place. Returns (offset, confidence)."""
+    import numpy as np
+    if len(actions) < 3:
+        return 0.0, 0.0
+    n = len(changed)
+    series = [(region_series(changed, a), a["_a"], a["_b"]) for a in actions]
+    offs = np.arange(lo, hi + 1e-9, 0.1)
+    score = np.zeros(len(offs))
+    for j, d in enumerate(offs):
+        tot = 0.0
+        for ser, a, b in series:
+            k0, k1 = int(math.floor((a + d - s0) * AN_FPS)), int(math.ceil((b + d - s0) * AN_FPS)) + 1
+            k0, k1 = max(0, k0), min(n, k1)
+            if k1 > k0:
+                tot += min(1.0, float(ser[k0:k1].max()) * 20)
+        score[j] = tot
+    top = [j for j in range(len(offs)) if score[j] >= score.max() - 1e-6]
+    best = top[len(top) // 2]  # the middle of the best plateau
+    far = [score[j] for j in range(len(offs)) if abs(offs[j] - offs[best]) > 1.5]
+    runner = max(far) if far else 0.0
+    return float(offs[best]), float((score[best] - runner) / max(score[best], 1e-6))
+
+
+def subtract(iv, cuts):
+    """Interval iv minus a list of intervals."""
+    out = [iv]
+    for c0, c1 in cuts:
+        nxt = []
+        for a, b in out:
+            if c1 <= a or c0 >= b:
+                nxt.append((a, b))
+            else:
+                if c0 > a:
+                    nxt.append((a, c0))
+                if c1 < b:
+                    nxt.append((c1, b))
+        out = nxt
+    return out
+
+
+def build_segments(start, end, pieces):
+    """pieces: non-overlapping (a, b, factor, dip) in recording time; factor 0 drops the stretch. Fills the gaps at
+    1x and returns sorted (a, b, factor, dip) covering [start, end]."""
     segs, cur = [], start
-    for a, b, f in sorted(speeds):
-        a, b = max(a, start), min(b, end)
+    for a, b, f, dip in sorted(pieces):
+        a, b = max(a, start, cur), min(b, end)
         if b <= a:
             continue
         if a > cur:
-            segs.append((cur, a, 1.0))
-        segs.append((a, b, float(f)))
+            segs.append((cur, a, 1.0, False))
+        segs.append((a, b, float(f), dip))
         cur = b
     if cur < end:
-        segs.append((cur, end, 1.0))
+        segs.append((cur, end, 1.0, False))
     return segs
 
 
 def warp(segs, r):
     """Recording time -> output time."""
     out = 0.0
-    for a, b, f in segs:
+    for a, b, f, _ in segs:
         if r <= a:
             return out
         if r < b:
-            return out + (r - a) / f
-        out += (b - a) / f
+            return out + ((r - a) / f if f else 0.0)
+        out += (b - a) / f if f else 0.0
     return out
+
+
+def reading_time(ch):
+    """Seconds a caption needs on screen: a beat to notice it, then about 25 characters a second."""
+    chars = len(ch.get("title", "")) + len(ch.get("sub", "")) + len(ch.get("chip", ""))
+    return 1.0 + chars / 25.0
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -281,22 +418,138 @@ def main():
     ap.add_argument("--footer", default="")
     ap.add_argument("--quality", choices=["high", "draft"], default="high")
     ap.add_argument("--keep", help="keep intermediate files in this folder")
+    ap.add_argument("--save-source", help="also write the synced, trimmed-to-length screen recording (source.mp4) and its "
+                                          "markers.json to this folder, to iterate on the board in Linux later")
+    ap.add_argument("--no-trim", action="store_true", help="don't trim dead air")
     args = ap.parse_args()
 
     M = json.load(open(args.markers))
     t0 = float(M["recordingStart"])
     evs = sorted(M["events"], key=lambda e: e["t"])
     chapters = [e for e in evs if e["kind"] == "chapter"]
-    taps = [e for e in evs if e["kind"] == "tap"]
-    speeds = [(e["t"] - t0, e["until"] - t0, e.get("factor", 4)) for e in evs if e["kind"] == "speed"]
-    ends = [e for e in evs if e["kind"] == "end"]
     if not chapters:
         sys.exit("markers.json has no chapters")
-    start = max(0.0, chapters[0]["t"] - t0 - 0.2)
-    end = (ends[-1]["t"] if ends else evs[-1]["t"] + 3) - t0
-    segs = build_segments(start, end, speeds)
+    ends = [e for e in evs if e["kind"] == "end"]
+    nominal_start = max(0.0, chapters[0]["t"] - t0 - 0.2)
+    nominal_end = (ends[-1]["t"] if ends else evs[-1]["t"] + 3) - t0
+
+    # 1. Look at the recording: what changes when.
+    s0 = max(0.0, nominal_start - 45)
+    frames = load_frames(args.recording, s0, nominal_end - s0 + 20)
+    changed = change_maps(frames)
+    import numpy as np
+    moving = changed.reshape(len(changed), -1).mean(axis=1)
+
+    # 2. Sync: recording time = marker time - t0 + offset.
+    actions = []
+    for e in evs:
+        if e["kind"] == "tap" and "x" in e:
+            actions.append(dict(e, _a=e.get("pre", e["t"] - 2.5) - t0, _b=e["t"] + 0.15 - t0))
+        elif e["kind"] == "type" and "x" in e:
+            actions.append(dict(e, _a=e["t"] - t0, _b=e["until"] + 0.15 - t0))
+    if M.get("synced"):
+        offset, conf = 0.0, 1.0
+    else:
+        offset, conf = find_offset(changed, actions, s0)
+        if conf < 0.08:
+            print(f"sync: no clear match (best {offset:+.1f}s, confidence {conf:.2f}); using recordingStart as is")
+            offset = 0.0
+        else:
+            print(f"sync: the recording runs {offset:+.1f}s from recordingStart (confidence {conf:.2f})")
+    R = lambda t: t - t0 + offset            # marker epoch -> recording time
+    K = lambda r: int(round((r - s0) * AN_FPS))  # recording time -> analysis frame
+    start, end = nominal_start + offset, nominal_end + offset
+    start = max(0.0, start)
+
+    # 3. Time: explicit fast-forwards and cuts, then trim the dead air everywhere else.
+    explicit = []
+    for e in evs:
+        if e["kind"] == "speed":
+            explicit.append((R(e["t"]), R(e["until"]), e.get("factor", 4), False))
+        elif e["kind"] == "cut":
+            explicit.append((R(e["t"]), R(e["until"]), 0, True))
+    # Typing: XCUITest types in uneven bursts with stalls (worse on a busy Simulator). Find the frames where the
+    # text visibly changes and re-time them so keystrokes land evenly at TYPE_RATE, like a person typing.
+    for e in evs:
+        if e["kind"] != "type" or "x" not in e or not e.get("chars"):
+            continue
+        a, b = R(e["t"]), R(e["until"]) + 0.15
+        ser = region_series(changed, e, grow=0.02)
+        keys = [k for k in range(max(0, K(a)), min(len(ser), K(b) + 1)) if ser[k] > 0.004]
+        if len(keys) < 2:
+            continue
+        rs = [s0 + k / AN_FPS for k in keys]
+        step = (e["chars"] / TYPE_RATE) / (len(rs) - 1)
+        for r0, r1 in zip(rs, rs[1:]):
+            explicit.append((r0, r1, max(0.25, min(8.0, (r1 - r0) / step)), False))
+    explicit.sort()
+    clean = []
+    for a, b, f, dip in explicit:  # no overlaps
+        if clean and a < clean[-1][1]:
+            a = clean[-1][1]
+        if b > a:
+            clean.append((a, b, f, dip))
+    explicit = clean
+    holds = [(R(e["t"]), R(e["until"])) for e in evs if e["kind"] == "hold"]
+    typing = [(R(e["t"]), R(e["until"]), e) for e in evs if e["kind"] == "type"]
+    protected = holds + [(a, b) for a, b, _, _ in explicit]
+
+    trims = []
+    if not args.no_trim:
+        k, n = K(start), min(len(moving), K(end))
+        while k < n:
+            if moving[k] < STATIC_FRAC:
+                j = k
+                while j < n and moving[j] < STATIC_FRAC:
+                    j += 1
+                a, b = s0 + k / AN_FPS, s0 + j / AN_FPS
+                for p0, p1 in subtract((a, b), sorted(protected)):
+                    # Between keystrokes keep less, so typing flows at a person's pace instead of stalling.
+                    keep = TYPE_KEEP if any(ta <= (p0 + p1) / 2 <= tb for ta, tb, _ in typing) else TRIM_KEEP
+                    if p1 - p0 > keep + 0.15:
+                        trims.append([p0 + keep / 2, p1 - keep / 2])
+                k = j
+            else:
+                k += 1
+
+    def segments():
+        return build_segments(start, end, explicit + [(a, b, 0, False) for a, b in trims if b > a])
+
+    # Every chapter keeps time to read its caption: give back trimmed time (latest first) where it's short.
+    ch_r = [R(c["t"]) for c in chapters] + [end]
+    given = []  # still time kept back so a caption can be read: as deliberate as a pause
+    for i, ch in enumerate(chapters):
+        segs = segments()
+        short = reading_time(ch) - (warp(segs, ch_r[i + 1]) - warp(segs, ch_r[i]))
+        for tr in sorted([t for t in trims if ch_r[i] <= t[0] < ch_r[i + 1]], key=lambda t: -t[0]):
+            if short <= 0:
+                break
+            give = min(short, tr[1] - tr[0])
+            given.append((tr[1] - give, tr[1]))
+            tr[1] -= give
+            short -= give
+        if short > 0.05:
+            print(f"  note: chapter '{ch['title']}' is {short:.1f}s short of its reading time (lengthen its pause)")
+    segs = segments()
     dur = warp(segs, end)
-    print(f"recording {start:.2f}–{end:.2f}s -> {dur:.2f}s of video, {len(chapters)} chapters, {len(taps)} taps, {len(speeds)} fast-forwards")
+    trimmed = sum(b - a for a, b in trims if b > a)
+    print(f"recording {start:.2f}-{end:.2f}s -> {dur:.2f}s of video: {len(chapters)} chapters, "
+          f"{sum(1 for e in evs if e['kind'] == 'tap')} taps, {sum(1 for e in evs if e['kind'] == 'speed')} fast-forwards, "
+          f"{sum(1 for x in explicit if not x[2])} cuts, {trimmed:.1f}s of dead air trimmed")
+
+    # Tap ripples land on the first change near the element while the tap ran (XCUITest's own timing is loose).
+    taps = []
+    for e in evs:
+        if e["kind"] != "tap":
+            continue
+        r = R(e["t"])
+        if "x" in e and "pre" in e:
+            ser = region_series(changed, e, grow=0.02)
+            k0, k1 = max(0, K(R(e["pre"]))), min(len(ser), K(R(e["t"] + 0.15)) + 1)
+            hit = [k for k in range(k0, k1) if ser[k] > 0.01]
+            if hit:
+                r = s0 + hit[0] / AN_FPS - 0.08
+        taps.append((r, e))
 
     work = args.keep or tempfile.mkdtemp(prefix="demo-")
     os.makedirs(work, exist_ok=True)
@@ -308,8 +561,8 @@ def main():
     for i, ch in enumerate(chapters):
         p = os.path.join(work, f"cap-{i:02d}.png")
         ox, oy = draw_caption(p, ch)
-        a = warp(segs, ch["t"] - t0)
-        b = warp(segs, chapters[i + 1]["t"] - t0) if i + 1 < len(chapters) else dur
+        a = warp(segs, ch_r[i])
+        b = warp(segs, ch_r[i + 1]) if i + 1 < len(chapters) else dur
         caps.append((p, a, b, ox, oy))
     if args.footer:
         draw_footer(bg, args.footer)
@@ -319,19 +572,27 @@ def main():
     preset, crf = os.environ.get("X264_PRESET"), os.environ.get("X264_CRF")
     enc += ["-preset", preset or ("veryfast" if args.quality == "high" else "ultrafast"), "-crf", crf or ("16" if args.quality == "high" else "23")]
 
-    # 1. The screen. simctl records a variable frame rate with messy decode timestamps, so filters that read the
+    # 4. The screen. simctl records a variable frame rate with messy decode timestamps, so filters that read the
     #    raw timestamps (trim, select) see the wrong frames. Seeking on the input is reliable, and after fps= the
     #    timestamps are clean: so one pass seeks to `start`, fixes the rate, scales to the phone's screen, then cuts
-    #    and fast-forwards.
+    #    and fast-forwards. A cut dips the screen to black for a moment on each side, like an app switch.
+    keep = [s for s in segs if s[2]]
     screen = os.path.join(work, "screen.mp4")
-    parts = [f"[0:v]fps={FPS},scale={SCREEN_W}:{SCREEN_H}:flags=lanczos,setsar=1,split={len(segs)}" + "".join(f"[p{i}]" for i in range(len(segs)))]
-    for i, (a, b, f) in enumerate(segs):
-        parts.append(f"[p{i}]trim=start={a - start:.3f}:end={b - start:.3f},setpts=(PTS-STARTPTS)/{f}[s{i}]")
-    graph = ";".join(parts) + ";" + "".join(f"[s{i}]" for i in range(len(segs))) + f"concat=n={len(segs)}:v=1:a=0,fps={FPS}[v]"
+    parts = [f"[0:v]fps={FPS},scale={SCREEN_W}:{SCREEN_H}:flags=lanczos,setsar=1,split={len(keep)}" + "".join(f"[p{i}]" for i in range(len(keep)))]
+    for i, (a, b, f, _) in enumerate(keep):
+        fx = ""
+        pos = segs.index(keep[i])
+        out_len = (b - a) / f
+        if pos + 1 < len(segs) and segs[pos + 1][3] and out_len > 0.4:
+            fx += f",fade=t=out:st={out_len - 0.18:.3f}:d=0.18"
+        if pos > 0 and segs[pos - 1][3] and out_len > 0.4:
+            fx += ",fade=t=in:st=0:d=0.18"
+        parts.append(f"[p{i}]trim=start={a - start:.3f}:end={b - start:.3f},setpts=(PTS-STARTPTS)/{f}{fx}[s{i}]")
+    graph = ";".join(parts) + ";" + "".join(f"[s{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=0,fps={FPS}[v]"
     run([FFMPEG, "-v", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{end - start + 0.5:.3f}", "-i", args.recording,
          "-filter_complex", graph, "-map", "[v]", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen], "screen")
 
-    # 2. The board: background, masked screen, captions (fade + drift in), tap ripples.
+    # 5. The board: background, masked screen, captions (fade + drift in), tap ripples.
     #    Every still is decoded once and repeated with the loop filter: "-loop 1" would decode the PNG again for
     #    every frame. Captions and ripples exist only for their own window (setpts shifts them into place).
     def still(idx, length, offset=0.0):
@@ -356,8 +617,8 @@ def main():
         g.append(f"[{last}][c{i}]overlay=x='{drift}':y={oy}:eof_action=pass:repeatlast=0[b{i + 1}]")
         last = f"b{i + 1}"
         n += 1
-    for j, tp in enumerate(taps):
-        tt = warp(segs, tp["t"] - t0)
+    for j, (r, tp) in enumerate(taps):
+        tt = warp(segs, r)
         if tt <= 0.1 or tt >= dur - 0.7:
             continue
         cx, cy = SCREEN_X + tp["x"] * SCREEN_W, SCREEN_Y + tp["y"] * SCREEN_H
@@ -372,6 +633,31 @@ def main():
     tmp = args.out + ".part.mp4"
     run([FFMPEG, "-v", "error", "-y", *inputs, "-filter_complex", ";".join(g), "-map", "[out]", "-r", str(FPS), "-t", f"{dur:.3f}", *enc, tmp], "board + encode")
     os.replace(tmp, args.out)
+
+    # 6. Optionally keep the synced source for iterating on the board later without a Mac.
+    if args.save_source:
+        os.makedirs(args.save_source, exist_ok=True)
+        lead = min(start, 1.0)
+        run([FFMPEG, "-v", "error", "-y", "-ss", f"{start - lead:.3f}", "-t", f"{end - start + lead + 0.5:.3f}", "-i", args.recording,
+             "-vf", f"fps={FPS},scale={SCREEN_W * 2}:{SCREEN_H * 2}:flags=lanczos,setsar=1",
+             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p", os.path.join(args.save_source, "source.mp4")], "source")
+        m2 = dict(M, recordingStart=t0 - offset + (start - lead), synced=True)
+        json.dump(m2, open(os.path.join(args.save_source, "markers.json"), "w"), indent=1)
+
+    # 7. What the video contains, in output time, for demo/review.py to check against the pixels.
+    report = {
+        "duration": dur, "offset": offset, "syncConfidence": conf, "trimmed": trimmed,
+        "screen": [SCREEN_X, SCREEN_Y, SCREEN_W, SCREEN_H],
+        "chapters": [{"title": ch["title"], "style": ch.get("style", "step"), "start": caps[i][1], "end": caps[i][2], "reading": reading_time(ch)} for i, ch in enumerate(chapters)],
+        "ripples": [{"t": warp(segs, r), "x": e["x"], "y": e["y"], "w": e.get("w", 0.2), "h": e.get("h", 0.06)} for r, e in taps],
+        "typing": [{"start": warp(segs, a), "end": warp(segs, b), "chars": e.get("chars", 0), "x": e.get("x", 0.5), "y": e.get("y", 0.2),
+                    "w": e.get("w", 0.9), "h": e.get("h", 0.06)} for a, b, e in typing],
+        "holds": [[warp(segs, a), warp(segs, b)] for a, b in holds + given],
+        "cuts": [warp(segs, a) for a, b, f, dip in explicit if not f],
+        "fastForwards": [[warp(segs, a), warp(segs, b), f] for a, b, f, dip in explicit if f],
+    }
+    json.dump(report, open(os.path.splitext(args.out)[0] + ".report.json", "w"), indent=1)
+
     if not args.keep:
         shutil.rmtree(work, ignore_errors=True)
     print(f"wrote {args.out} ({os.path.getsize(args.out) / 1e6:.1f} MB, {dur:.1f}s)")

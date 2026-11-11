@@ -47,7 +47,7 @@ Each step saves a screenshot.
 One workflow (`.github/workflows/e2e.yml`, "CI") runs on every PR into `main` and every push to `main`, on two of GitHub's `xcode-27` macOS runners in parallel:
 
 - **e2e**: API tests against Postgres, then the e2e suite in the newest iOS Simulator against the live API. It's the check that has to pass before merging. Screenshots and logs go to `e2e-output/<branch>`.
-- **demo** (PRs): records the walkthrough, composes it into `demo.mp4` (1080p60) on the same Mac, and comments on the PR with a link to it on `demo-preview/<branch>`.
+- **demo** (PRs): records the walkthrough, composes it into `demo.mp4` (1080p60) on the same Mac, checks it (`demo/review.py`: sync, dead air, typing pace, flashes, caption time), and comments on the PR with the link and the review. The video, review, contact sheets and synced source live on `demo-preview/<branch>`.
 
 `cleanup.yml` deletes a PR's `demo-preview/` and `e2e-output/` branches when it closes. A push takes about 5 minutes to a green e2e and a posted demo; CLAUDE.md has the measurements and why it's laid out this way.
 

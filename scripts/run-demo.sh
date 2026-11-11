@@ -16,7 +16,8 @@ echo "::group::Record the walkthrough"
 rm -rf "$OUT/demo.xcresult"
 xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/raw.mp4" 2> "$OUT/record.log" &
 REC_PID=$!
-# The markers are wall-clock times; note when the recording's first frame was taken.
+# The markers are wall-clock times. This is only roughly when the first frame lands (an idle Simulator sends
+# none); demo/compose.py finds the exact offset from the video itself.
 for _ in $(seq 1 60); do grep -q "Recording started" "$OUT/record.log" 2>/dev/null && break; sleep 0.25; done
 START="$(python3 -c 'import time; print(time.time())')"
 set +e
