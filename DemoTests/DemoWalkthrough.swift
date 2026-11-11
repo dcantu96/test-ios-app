@@ -17,7 +17,6 @@ final class DemoWalkthrough: DemoCase {
         app = launchApp()
         XCTAssertTrue(rowShowing("Ready to open").waitForExistence(timeout: 30))
         waitUntilDrawn()
-        waitForQuiet() // smooth animations need a calm Mac
         pause(0.5)
 
         chapter(style: "title", kicker: "New in this PR", title: "Write back",

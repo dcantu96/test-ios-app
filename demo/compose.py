@@ -22,6 +22,7 @@ markers.json:
     {"t": <epoch>, "kind": "cut", "until": <epoch>},                # drop this stretch (a quick dip hides the join)
     {"t": <epoch>, "kind": "end"}
   ],
+  "slowmo": 4,                         # optional: the app ran its animations 4x slower; moving stretches play 4x
   "synced": true                       # optional: recordingStart is exact, skip the automatic sync
 }
 
@@ -537,8 +538,28 @@ def main():
             else:
                 k += 1
 
+    # Slow motion (markers "slowmo": k): the app ran its animations k times slower so the Simulator could draw
+    # k times more frames into each. Play every moving stretch back k times faster, except typing (re-timed above)
+    # and explicit fast-forwards and cuts.
+    slow = float(M.get("slowmo", 1) or 1)
+    motion = []
+    if slow > 1:
+        busy = sorted([(a, b) for a, b, _, _ in explicit] + [(ta, tb) for ta, tb, _ in typing])
+        k, n = K(start), min(len(moving), K(end))
+        while k < n:
+            if moving[k] >= STATIC_FRAC:
+                j = k
+                while j < n and moving[j] >= STATIC_FRAC:
+                    j += 1
+                for p0, p1 in subtract((s0 + k / AN_FPS - 0.1, s0 + j / AN_FPS + 0.05), busy):
+                    if p1 - p0 > 0.05:
+                        motion.append((p0, p1, slow, False))
+                k = j
+            else:
+                k += 1
+
     def segments():
-        return build_segments(start, end, explicit + [(a, b, 0, False) for a, b in trims if b > a])
+        return build_segments(start, end, explicit + motion + [(a, b, 0, False) for a, b in trims if b > a])
 
     # Every chapter keeps time to read its caption: give back trimmed time (latest first) where it's short.
     ch_r = [R(c["t"]) for c in chapters] + [end]
@@ -616,7 +637,8 @@ def main():
         return min(b, a + (t - starts[i]) * f)
 
     frame_bytes = SCREEN_W * SCREEN_H * 3
-    dec = subprocess.Popen([FFMPEG, "-v", "error", "-i", norm, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
+    dec = subprocess.Popen([FFMPEG, "-v", "error", "-i", norm, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL)  # it's stopped early once the video is done: "Broken pipe" is expected
     screen = os.path.join(work, "screen.mp4")
     enc_p = subprocess.Popen([FFMPEG, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{SCREEN_W}x{SCREEN_H}",
                               "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", screen],
@@ -709,6 +731,7 @@ def main():
         "holds": [[warp(segs, a), warp(segs, b)] for a, b in holds + given],
         "cuts": [warp(segs, a) for a, b, f, dip in explicit if not f],
         "fastForwards": [[warp(segs, a), warp(segs, b), f] for a, b, f, dip in explicit if f],
+        "slowmo": slow,
     }
     json.dump(report, open(os.path.splitext(args.out)[0] + ".report.json", "w"), indent=1)
 

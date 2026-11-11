@@ -36,8 +36,8 @@ struct ContentView: View {
                     capsuleList
                 }
                 .padding()
-                .animation(.snappy, value: store.lockedNotice)
-                .animation(.snappy, value: store.capsules)
+                .animation(.snappy.paced, value: store.lockedNotice)
+                .animation(.snappy.paced, value: store.capsules)
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Backdrop())
@@ -290,10 +290,10 @@ struct RevealView: View {
         .sensoryFeedback(.success, trigger: cracked)
         .onChange(of: writing) { _, isWriting in
             // Room above the keyboard for the message and the reply field.
-            if isWriting { withAnimation(.snappy) { detent = .large } }
+            if isWriting { withAnimation(.snappy.paced) { detent = .large } }
         }
         .onAppear {
-            withAnimation(.spring(duration: 0.9, bounce: 0.3).delay(0.35)) {
+            withAnimation(.spring(duration: 0.9, bounce: 0.3).delay(0.35).paced) {
                 cracked = true
             }
         }
