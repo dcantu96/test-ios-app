@@ -54,6 +54,18 @@ m = json.load(open(found))
 m["recordingStart"] = start
 json.dump(m, open(dst, "w"), indent=1)
 print(len(m["events"]), "markers; recording started at", start)
+# The walkthrough's sync screenshots (sync-NN), which compose.py lines the recording up against.
+import re, shutil
+shots = os.path.join(os.path.dirname(dst), "shots")
+os.makedirs(shots, exist_ok=True)
+n = 0
+for test in json.load(open(manifest)):
+    for a in test.get("attachments", []):
+        hit = re.match(r"(sync-\d+)", a.get("suggestedHumanReadableName") or "")
+        if hit:
+            shutil.copy(os.path.join(src, a["exportedFileName"]), os.path.join(shots, hit.group(1) + ".png"))
+            n += 1
+print(n, "sync screenshots")
 PY
 echo "::endgroup::"
 exit "$STATUS"
