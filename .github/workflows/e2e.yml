@@ -1,16 +1,18 @@
-name: E2E in iOS Simulator
+name: E2E
 
+# The merge gate. Every PR into main runs the full end-to-end suite (API tests against Postgres, then the
+# XCUITest suite driving the app in the newest iOS Simulator against the live API). Make the "e2e" check
+# required on main so nothing merges without it. No video here: demos are demo.yml's job.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md", "demo/**"]
   pull_request:
     branches: [main]
-    paths-ignore: ["**.md", "demo/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "demo/**", "DemoTests/**"]
   workflow_dispatch:
 
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,9 +20,13 @@ permissions:
 
 jobs:
   e2e:
+    name: e2e
     # Xcode 27 / macOS 27 image (Apple Silicon). Newest Apple toolchain GitHub hosts.
     runs-on: xcode-27
     timeout-minutes: 40
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PUBLISH_BRANCH: e2e-output/${{ github.head_ref || github.ref_name }}
     steps:
       - uses: actions/checkout@v5
 
@@ -45,9 +51,10 @@ jobs:
         with:
           name: e2e-output
           path: out/
+          retention-days: 7
           if-no-files-found: warn
 
-      - name: Publish results to the simulator-output branch
+      - name: Publish screenshots to the e2e-output branch
         if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}

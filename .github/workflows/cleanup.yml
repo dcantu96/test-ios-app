@@ -1,0 +1,23 @@
+name: Clean up previews
+
+# Demos are one-off previews: when a PR closes (merged or not), delete its demo video and e2e results branches.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete demo-preview and e2e-output branches for this PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          REMOTE="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for b in "demo-preview/$BRANCH" "e2e-output/$BRANCH"; do
+            git push -q "$REMOTE" --delete "$b" && echo "deleted $b" || echo "no $b"
+          done
